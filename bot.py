@@ -26,12 +26,14 @@ def main_kb():
     
 @dp.message(Command("start"))
 async def start_handler(message: Message):
-    await message.answer(
-        "Ассаляму алейкум 🤍\n\n"
-        "Это бот для сбора садака.\n"
-        "Поддержите наш сбор через Telegram Stars.\n\n"
-        "Скоро здесь появятся активные сборы."
-    )
+   await message.answer(
+    "Assalamu alaykum 🤍\n\n"
+    "Welcome. This bot will accept support via Telegram Stars.\n"
+    "For now we are preparing campaigns.\n\n"
+    "Use the buttons below:",
+    reply_markup=main_kb()
+)
+
 async def main():
     await dp.start_polling(bot)
 
