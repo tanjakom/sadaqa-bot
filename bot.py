@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
 from aiogram.filters import Command
@@ -34,8 +35,23 @@ async def start_handler(message: Message):
         reply_markup=main_kb()
     )
 
+async def health_server():
+    app = web.Application()
+
+    async def health(request):
+        return web.Response(text="ok")
+
+    app.router.add_get("/", health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.getenv("PORT", "10000"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 async def main():
+    await health_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
