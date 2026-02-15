@@ -1,15 +1,17 @@
 import os
 import logging
 import asyncio
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime
 
 import aiosqlite
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import (
-    Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
+    Message,
+    CallbackQuery,
+    LabeledPrice,
+    PreCheckoutQuery,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
@@ -20,7 +22,6 @@ logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or "0")
-TIMEZONE = os.getenv("TIMEZONE", "Europe/Helsinki")
 DEFAULT_EUR_TO_STARS = int(os.getenv("EUR_TO_STARS", "50") or "50")  # дефолт, если в базе ещё нет
 
 if not BOT_TOKEN:
@@ -30,7 +31,10 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 DB_PATH = "data.db"
-PENDING = {}  # user_id -> {"type": "water"|"iftar"}
+
+# user_id -> {"type": "water"|"iftar"}
+PENDING = {}
+
 
 # ---------------- DB ----------------
 
@@ -95,7 +99,11 @@ async def get_user_lang(user_id: int) -> str | None:
             row = await cur.fetchone()
             return row[0] if row else None
 
+
 # ---------------- Helpers ----------------
+
+def admin_only(message: Message) -> bool:
+    return ADMIN_ID != 0 and message.from_user and message.from_user.id == ADMIN_ID
 
 def battery(current: int, total: int, width: int = 10) -> str:
     if total <= 0:
@@ -104,13 +112,16 @@ def battery(current: int, total: int, width: int = 10) -> str:
     filled = int(round(ratio * width))
     return "▰" * filled + "▱" * (width - filled)
 
-def admin_only(message: Message) -> bool:
-    return ADMIN_ID != 0 and message.from_user and message.from_user.id == ADMIN_ID
+async def safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode=None):
+    try:
+        await call.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except TelegramBadRequest:
+        await call.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 def kb_lang_select():
     kb = InlineKeyboardBuilder()
-    kb.button(text="🇷🇺 СТАРТ", callback_data="lang_ru")
-    kb.button(text="🇬🇧 START", callback_data="lang_en")
+    kb.button(text="Русский", callback_data="lang_ru")
+    kb.button(text="English", callback_data="lang_en")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -118,10 +129,12 @@ def kb_main(lang: str):
     kb = InlineKeyboardBuilder()
     if lang == "ru":
         kb.button(text="📋 Сборы", callback_data="list")
-        kb.button(text="ℹ️ О Stars", callback_data="currency")
+        kb.button(text="ℹ️ О Stars", callback_data="stars_info")
+        kb.button(text="🌐 Язык", callback_data="lang_menu")
     else:
         kb.button(text="📋 Campaigns", callback_data="list")
-        kb.button(text="ℹ️ About Stars", callback_data="currency")
+        kb.button(text="ℹ️ About Stars", callback_data="stars_info")
+        kb.button(text="🌐 Language", callback_data="lang_menu")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -129,11 +142,11 @@ def kb_list(lang: str):
     kb = InlineKeyboardBuilder()
     if lang == "ru":
         kb.button(text="💧 Сукья-ль-ма (вода)", callback_data="water")
-        kb.button(text="🍲 Ифтары (завтра)", callback_data="iftar")
+        kb.button(text="🍲 Программа ифтаров", callback_data="iftar")
         kb.button(text="⬅️ Назад", callback_data="back")
     else:
         kb.button(text="💧 Water (Sukya-l-ma)", callback_data="water")
-        kb.button(text="🍲 Iftar (tomorrow)", callback_data="iftar")
+        kb.button(text="🍲 Iftars Program", callback_data="iftar")
         kb.button(text="⬅️ Back", callback_data="back")
     kb.adjust(1)
     return kb.as_markup()
@@ -162,6 +175,7 @@ async def water_text(lang: str) -> str:
     target = int(await kv_get("water_target_eur") or "235")
     raised = int(await kv_get("water_raised_eur") or "0")
     bar = battery(raised, target)
+
     if lang == "ru":
         return (
             "💧 *Сукья-ль-ма*\n"
@@ -171,6 +185,7 @@ async def water_text(lang: str) -> str:
             f"{bar}\n\n"
             "Выберите сумму:"
         )
+
     return (
         "💧 *Sukya-l-ma (Water)*\n"
         "Drinking water distribution (*5000 L*).\n\n"
@@ -186,18 +201,21 @@ async def iftar_text(lang: str) -> str:
     raised = int(await kv_get("iftar_raised_portions") or "0")
     rate = await get_rate()
     bar = battery(raised, target)
+
     portion_stars = 4 * rate
+
     if lang == "ru":
         return (
-            f"🍲 *Ифтары Рамадана — День {day} (на завтра)*\n\n"
+            f"🍲 *Программа ифтаров — {day} Рамадана*\n\n"
             f"Цель: *{target} порций*\n"
             f"Собрано: *{raised}* / *{target}*\n"
             f"{bar}\n\n"
             f"1 порция = 4€ (≈ {portion_stars}⭐ при курсе 1€={rate}⭐)\n"
             "Выберите количество порций:"
         )
+
     return (
-        f"🍲 *Ramadan Iftar — Day {day} (for tomorrow)*\n\n"
+        f"🍲 *Iftars — {day} of Ramadan*\n\n"
         f"Goal: *{target} portions*\n"
         f"Raised: *{raised}* / *{target}*\n"
         f"{bar}\n\n"
@@ -205,42 +223,14 @@ async def iftar_text(lang: str) -> str:
         "Choose quantity:"
     )
 
-async def safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode=None):
-    try:
-        await call.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-    except TelegramBadRequest:
-        # например, "message is not modified" или нельзя редактировать — тогда просто отправим новое
-        await call.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
-
-async def schedule_midnight_rollover():
-    tz = ZoneInfo(TIMEZONE)
-    while True:
-        now = datetime.now(tz)
-        tomorrow = (now + timedelta(days=1)).date()
-        next_midnight = datetime.combine(tomorrow, datetime.min.time(), tzinfo=tz)
-        sleep_seconds = (next_midnight - now).total_seconds()
-        await asyncio.sleep(max(1, int(sleep_seconds)))
-
-        # после полуночи: если цель закрыта — перейти на следующий день
-        try:
-            target = int(await kv_get("iftar_target_portions") or "100")
-            raised = int(await kv_get("iftar_raised_portions") or "0")
-            if raised >= target:
-                await kv_inc_int("iftar_day", 1)
-                await kv_set("iftar_raised_portions", "0")
-                # админ-уведомление (по желанию)
-                if ADMIN_ID:
-                    await bot.send_message(ADMIN_ID, "✅ Ифтар-день закрыт автоматически в 00:00. Перешли на следующий день.")
-        except Exception as e:
-            logging.exception("Midnight rollover error: %s", e)
 
 # ---------------- Handlers ----------------
 
 @dp.message(Command("start"))
 async def start(message: Message):
-    # Всегда сначала выбор языка, если ещё не выбран
     user_id = message.from_user.id
     saved = await get_user_lang(user_id)
+
     if not saved:
         await message.answer(
             "Ассаляму алейкум 🤍\n\nВыберите язык / Choose language:",
@@ -248,14 +238,13 @@ async def start(message: Message):
         )
         return
 
-    # Если язык уже выбран — обычное меню
     lang = saved
     if lang == "ru":
         text = (
             "Ассаляму алейкум 🤍\n\n"
             "Добро пожаловать.\n"
             "Этот бот принимает поддержку через Telegram Stars.\n\n"
-            "Нажмите «Сборы» чтобы выбрать сбор."
+            "Нажмите «Сборы», чтобы выбрать сбор."
         )
     else:
         text = (
@@ -266,6 +255,10 @@ async def start(message: Message):
         )
     await message.answer(text, reply_markup=kb_main(lang))
 
+@dp.message(Command("lang"))
+async def lang_cmd(message: Message):
+    await message.answer("Выберите язык / Choose language:", reply_markup=kb_lang_select())
+
 @dp.callback_query(lambda c: c.data in {"lang_ru", "lang_en"})
 async def choose_lang(call: CallbackQuery):
     lang = "ru" if call.data == "lang_ru" else "en"
@@ -273,23 +266,21 @@ async def choose_lang(call: CallbackQuery):
     await call.answer()
 
     if lang == "ru":
-        text = (
-            "Ассаляму алейкум 🤍\n\n"
-            "Язык установлен: Русский.\n"
-            "Нажмите «Сборы» чтобы выбрать сбор."
-        )
+        text = "Язык установлен: Русский.\n\nНажмите «Сборы», чтобы выбрать сбор."
     else:
-        text = (
-            "Assalamu alaykum 🤍\n\n"
-            "Language set: English.\n"
-            "Tap “Campaigns” to choose a campaign."
-        )
+        text = "Language set: English.\n\nTap “Campaigns” to choose a campaign."
+
     await safe_edit(call, text, reply_markup=kb_main(lang))
 
-@dp.callback_query(lambda c: c.data in {"back", "list", "currency", "water", "iftar"})
+@dp.callback_query(lambda c: c.data in {"lang_menu", "back", "list", "stars_info", "water", "iftar"})
 async def menu(call: CallbackQuery):
     saved = await get_user_lang(call.from_user.id)
     lang = saved or "ru"
+
+    if call.data == "lang_menu":
+        await safe_edit(call, "Выберите язык / Choose language:", reply_markup=kb_lang_select())
+        await call.answer()
+        return
 
     if call.data == "back":
         await safe_edit(call, ("Меню:" if lang == "ru" else "Menu:"), reply_markup=kb_main(lang))
@@ -301,12 +292,20 @@ async def menu(call: CallbackQuery):
         await call.answer()
         return
 
-    if call.data == "currency":
+    if call.data == "stars_info":
         rate = await get_rate()
         if lang == "ru":
-            msg = f"Оплата проходит в Telegram Stars.\nТекущий курс в боте: *1€ = {rate}⭐*"
+            msg = (
+                "Оплата проходит внутри Telegram через *Stars*.\n"
+                "Для пользователя это выглядит как обычная покупка в Telegram.\n\n"
+                f"Текущий курс в боте: *1€ = {rate}⭐*"
+            )
         else:
-            msg = f"Payments are via Telegram Stars.\nCurrent bot rate: *1€ = {rate}⭐*"
+            msg = (
+                "Payments happen inside Telegram via *Stars*.\n"
+                "For the user it looks like a regular Telegram purchase.\n\n"
+                f"Current bot rate: *1€ = {rate}⭐*"
+            )
         await safe_edit(call, msg, reply_markup=kb_main(lang), parse_mode="Markdown")
         await call.answer()
         return
@@ -320,6 +319,7 @@ async def menu(call: CallbackQuery):
         await safe_edit(call, await iftar_text(lang), reply_markup=kb_iftar_pay(lang), parse_mode="Markdown")
         await call.answer()
         return
+
 
 # ---------- Pay callbacks ----------
 
@@ -346,7 +346,7 @@ async def pay_water(call: CallbackQuery):
         payload=payload,
         currency="XTR",
         prices=[LabeledPrice(label=f"{eur} EUR", amount=stars)],
-        provider_token="",
+        provider_token="",  # Stars: empty
     )
     await call.answer()
 
@@ -367,16 +367,20 @@ async def pay_iftar(call: CallbackQuery):
     payload = f"iftar:portions:{portions}"
 
     day = int(await kv_get("iftar_day") or "1")
+    title_ru = f"Программа ифтаров — {day} Рамадана"
+    title_en = f"Iftars — {day} of Ramadan"
+
     await bot.send_invoice(
         chat_id=call.from_user.id,
-        title=(f"Ифтары — День {day}" if lang == "ru" else f"Iftar — Day {day}"),
+        title=(title_ru if lang == "ru" else title_en),
         description=(f"{portions} порций (≈ {stars}⭐)" if lang == "ru" else f"{portions} portions (≈ {stars}⭐)"),
         payload=payload,
         currency="XTR",
         prices=[LabeledPrice(label=f"{portions} portions", amount=stars)],
-        provider_token="",
+        provider_token="",  # Stars: empty
     )
     await call.answer()
+
 
 # ---------- Other amount input ----------
 
@@ -391,6 +395,7 @@ async def other_input(message: Message):
     saved = await get_user_lang(message.from_user.id)
     lang = saved or "ru"
     rate = await get_rate()
+
     raw = (message.text or "").strip()
 
     try:
@@ -405,6 +410,7 @@ async def other_input(message: Message):
         eur = n
         stars = eur * rate
         payload = f"water:eur:{eur}"
+
         await bot.send_invoice(
             chat_id=message.from_user.id,
             title=("Сукья-ль-ма (вода)" if lang == "ru" else "Sukya-l-ma (Water)"),
@@ -421,10 +427,14 @@ async def other_input(message: Message):
         portions = n
         stars = portions * 4 * rate
         payload = f"iftar:portions:{portions}"
+
         day = int(await kv_get("iftar_day") or "1")
+        title_ru = f"Программа ифтаров — {day} Рамадана"
+        title_en = f"Iftars — {day} of Ramadan"
+
         await bot.send_invoice(
             chat_id=message.from_user.id,
-            title=(f"Ифтары — День {day}" if lang == "ru" else f"Iftar — Day {day}"),
+            title=(title_ru if lang == "ru" else title_en),
             description=(f"{portions} порций (≈ {stars}⭐)" if lang == "ru" else f"{portions} portions (≈ {stars}⭐)"),
             payload=payload,
             currency="XTR",
@@ -433,6 +443,7 @@ async def other_input(message: Message):
         )
         PENDING.pop(message.from_user.id, None)
         return
+
 
 # ---------- Payments ----------
 
@@ -464,6 +475,7 @@ async def successful_payment(message: Message):
         await kv_inc_int("iftar_raised_portions", val_i)
         await message.answer("✅ Спасибо! Платёж получен." if lang == "ru" else "✅ Thank you! Payment received.")
         return
+
 
 # ---------- Admin commands ----------
 
@@ -499,7 +511,7 @@ async def cmd_set_iftar_day(message: Message):
         return
     parts = (message.text or "").split()
     if len(parts) != 2:
-        await message.answer("Использование: /set_iftar_day 3")
+        await message.answer("Использование: /set_iftar_day 10")
         return
     await kv_set("iftar_day", str(int(parts[1])))
     await kv_set("iftar_raised_portions", "0")
@@ -516,15 +528,17 @@ async def cmd_set_water_target(message: Message):
     await kv_set("water_target_eur", str(int(parts[1])))
     await message.answer("OK")
 
+
 # ---------- Health server for Render ----------
 
 async def health_server():
     app = web.Application()
 
-    async def health(request):
+    async def health(_request):
         return web.Response(text="ok")
 
     app.router.add_get("/", health)
+
     runner = web.AppRunner(app)
     await runner.setup()
 
@@ -532,10 +546,10 @@ async def health_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
+
 async def main():
     await db_init()
     await health_server()
-    asyncio.create_task(schedule_midnight_rollover())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
