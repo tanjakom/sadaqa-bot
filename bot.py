@@ -17,12 +17,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 from dotenv import load_dotenv
 
+# ---------------- Config ----------------
+
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or "0")
-DEFAULT_EUR_TO_STARS = int(os.getenv("EUR_TO_STARS", "50") or "50")  # дефолт, если в базе ещё нет
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+DEFAULT_EUR_TO_STARS = int(os.getenv("EUR_TO_STARS", "50") or "50")
+PORT = int(os.getenv("PORT", "10000"))
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
@@ -33,13 +36,22 @@ dp = Dispatcher()
 DB_PATH = "data.db"
 
 # user_id -> {"type": "water"|"iftar"}
-PENDING = {}
+PENDING: dict[int, dict] = {}
 
-from aiogram.types import Message
 
-@dp.channel_post()
-async def channel_logger(message: Message):
-    logging.info(f"ARCHIVE CHANNEL ID = {message.chat.id}")
+# ---------------- Admin notify ----------------
+
+async def notify_admin(text: str):
+    if ADMIN_ID:
+        try:
+            await bot.send_message(ADMIN_ID, text)
+        except Exception:
+            logging.exception("Failed to notify admin")
+
+
+def admin_only(message: Message) -> bool:
+    return bool(ADMIN_ID) and message.from_user and message.from_user.id == ADMIN_ID
+
 
 # ---------------- DB ----------------
 
@@ -57,14 +69,22 @@ async def db_init():
             lang TEXT NOT NULL
         )
         """)
+
         # defaults
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('water_target_eur','235')")
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('water_raised_eur','0')")
+
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_day','1')")
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_target_portions','100')")
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_raised_portions','0')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('eur_to_stars', ?)", (str(DEFAULT_EUR_TO_STARS),))
+
+        await db.execute(
+            "INSERT OR IGNORE INTO kv(k,v) VALUES('eur_to_stars', ?)",
+            (str(DEFAULT_EUR_TO_STARS),)
+        )
+
         await db.commit()
+
 
 async def kv_get(key: str) -> str:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -72,21 +92,26 @@ async def kv_get(key: str) -> str:
             row = await cur.fetchone()
             return row[0] if row else ""
 
+
 async def kv_set(key: str, value: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+            "INSERT INTO kv(k,v) VALUES(?,?) "
+            "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
             (key, value),
         )
         await db.commit()
+
 
 async def kv_inc_int(key: str, delta: int):
     val = int(await kv_get(key) or "0")
     val += int(delta)
     await kv_set(key, str(val))
 
+
 async def get_rate() -> int:
     return int(await kv_get("eur_to_stars") or str(DEFAULT_EUR_TO_STARS))
+
 
 async def set_user_lang(user_id: int, lang: str):
     lang = "ru" if lang == "ru" else "en"
@@ -98,6 +123,7 @@ async def set_user_lang(user_id: int, lang: str):
         )
         await db.commit()
 
+
 async def get_user_lang(user_id: int) -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT lang FROM user_prefs WHERE user_id=?", (user_id,)) as cur:
@@ -105,10 +131,7 @@ async def get_user_lang(user_id: int) -> str | None:
             return row[0] if row else None
 
 
-# ---------------- Helpers ----------------
-
-def admin_only(message: Message) -> bool:
-    return ADMIN_ID != 0 and message.from_user and message.from_user.id == ADMIN_ID
+# ---------------- UI helpers ----------------
 
 def battery(current: int, total: int, width: int = 10) -> str:
     if total <= 0:
@@ -117,11 +140,13 @@ def battery(current: int, total: int, width: int = 10) -> str:
     filled = int(round(ratio * width))
     return "▰" * filled + "▱" * (width - filled)
 
+
 async def safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode=None):
     try:
         await call.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except TelegramBadRequest:
         await call.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
 
 def kb_lang_select():
     kb = InlineKeyboardBuilder()
@@ -129,6 +154,7 @@ def kb_lang_select():
     kb.button(text="English", callback_data="lang_en")
     kb.adjust(2)
     return kb.as_markup()
+
 
 def kb_main(lang: str):
     kb = InlineKeyboardBuilder()
@@ -143,6 +169,7 @@ def kb_main(lang: str):
     kb.adjust(1)
     return kb.as_markup()
 
+
 def kb_list(lang: str):
     kb = InlineKeyboardBuilder()
     if lang == "ru":
@@ -156,6 +183,7 @@ def kb_list(lang: str):
     kb.adjust(1)
     return kb.as_markup()
 
+
 def kb_water_pay(lang: str):
     kb = InlineKeyboardBuilder()
     kb.button(text="⭐ 10€", callback_data="pay_water_10")
@@ -166,6 +194,7 @@ def kb_water_pay(lang: str):
     kb.adjust(2, 2, 1)
     return kb.as_markup()
 
+
 def kb_iftar_pay(lang: str):
     kb = InlineKeyboardBuilder()
     kb.button(text=("⭐ 5 порций" if lang == "ru" else "⭐ 5 portions"), callback_data="pay_iftar_5")
@@ -175,6 +204,7 @@ def kb_iftar_pay(lang: str):
     kb.button(text=("⬅️ Назад" if lang == "ru" else "⬅️ Back"), callback_data="list")
     kb.adjust(2, 2, 1)
     return kb.as_markup()
+
 
 async def water_text(lang: str) -> str:
     target = int(await kv_get("water_target_eur") or "235")
@@ -199,6 +229,7 @@ async def water_text(lang: str) -> str:
         f"{bar}\n\n"
         "Choose amount:"
     )
+
 
 async def iftar_text(lang: str) -> str:
     day = int(await kv_get("iftar_day") or "1")
@@ -258,11 +289,14 @@ async def start(message: Message):
             "This bot accepts support via Telegram Stars.\n\n"
             "Tap “Campaigns” to choose a campaign."
         )
+
     await message.answer(text, reply_markup=kb_main(lang))
+
 
 @dp.message(Command("lang"))
 async def lang_cmd(message: Message):
     await message.answer("Выберите язык / Choose language:", reply_markup=kb_lang_select())
+
 
 @dp.callback_query(lambda c: c.data in {"lang_ru", "lang_en"})
 async def choose_lang(call: CallbackQuery):
@@ -276,6 +310,7 @@ async def choose_lang(call: CallbackQuery):
         text = "Language set: English.\n\nTap “Campaigns” to choose a campaign."
 
     await safe_edit(call, text, reply_markup=kb_main(lang))
+
 
 @dp.callback_query(lambda c: c.data in {"lang_menu", "back", "list", "stars_info", "water", "iftar"})
 async def menu(call: CallbackQuery):
@@ -326,7 +361,7 @@ async def menu(call: CallbackQuery):
         return
 
 
-# ---------- Pay callbacks ----------
+# ---------------- Pay callbacks ----------------
 
 @dp.callback_query(lambda c: c.data.startswith("pay_water_"))
 async def pay_water(call: CallbackQuery):
@@ -336,7 +371,11 @@ async def pay_water(call: CallbackQuery):
 
     if call.data == "pay_water_other":
         PENDING[call.from_user.id] = {"type": "water"}
-        await call.message.answer("Введите сумму в евро (целое число), например 12:" if lang == "ru" else "Enter amount in EUR (whole number), e.g. 12:")
+        await call.message.answer(
+            "Введите сумму в евро (целое число), например 12:"
+            if lang == "ru" else
+            "Enter amount in EUR (whole number), e.g. 12:"
+        )
         await call.answer()
         return
 
@@ -355,6 +394,7 @@ async def pay_water(call: CallbackQuery):
     )
     await call.answer()
 
+
 @dp.callback_query(lambda c: c.data.startswith("pay_iftar_"))
 async def pay_iftar(call: CallbackQuery):
     saved = await get_user_lang(call.from_user.id)
@@ -363,7 +403,11 @@ async def pay_iftar(call: CallbackQuery):
 
     if call.data == "pay_iftar_other":
         PENDING[call.from_user.id] = {"type": "iftar"}
-        await call.message.answer("Введите количество порций (целое число), например 7:" if lang == "ru" else "Enter number of portions (whole number), e.g. 7:")
+        await call.message.answer(
+            "Введите количество порций (целое число), например 7:"
+            if lang == "ru" else
+            "Enter number of portions (whole number), e.g. 7:"
+        )
         await call.answer()
         return
 
@@ -387,7 +431,7 @@ async def pay_iftar(call: CallbackQuery):
     await call.answer()
 
 
-# ---------- Other amount input ----------
+# ---------------- Other amount input ----------------
 
 @dp.message()
 async def other_input(message: Message):
@@ -408,7 +452,11 @@ async def other_input(message: Message):
         if n <= 0:
             raise ValueError
     except Exception:
-        await message.answer("Нужно целое число > 0. Попробуйте ещё раз:" if lang == "ru" else "Please send a whole number > 0. Try again:")
+        await message.answer(
+            "Нужно целое число > 0. Попробуйте ещё раз:"
+            if lang == "ru" else
+            "Please send a whole number > 0. Try again:"
+        )
         return
 
     if st["type"] == "water":
@@ -450,11 +498,12 @@ async def other_input(message: Message):
         return
 
 
-# ---------- Payments ----------
+# ---------------- Payments ----------------
 
 @dp.pre_checkout_query()
 async def pre_checkout(pre: PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pre.id, ok=True)
+
 
 @dp.message(lambda m: getattr(m, "successful_payment", None) is not None)
 async def successful_payment(message: Message):
@@ -464,25 +513,68 @@ async def successful_payment(message: Message):
     saved = await get_user_lang(message.from_user.id)
     lang = saved or "ru"
 
+    # For XTR: total_amount is Stars count
+    stars_total = sp.total_amount
+    rate = await get_rate()
+    when = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
     try:
         t, unit, val = payload.split(":")
         val_i = int(val)
     except Exception:
+        await notify_admin(
+            "✅ Оплата Stars (неизвестный payload)\n"
+            f"Stars: {stars_total}⭐\n"
+            f"Время: {when}\n"
+            f"User: @{message.from_user.username or '-'} / {message.from_user.id}\n"
+            f"Payload: {payload}"
+        )
         await message.answer("✅ Спасибо! Платёж получен." if lang == "ru" else "✅ Thank you! Payment received.")
         return
 
     if t == "water" and unit == "eur":
         await kv_inc_int("water_raised_eur", val_i)
+
+        await notify_admin(
+            "✅ Оплата Stars (ВОДА)\n"
+            f"Сумма: {val_i}€\n"
+            f"Stars: {stars_total}⭐ (курс 1€={rate}⭐)\n"
+            f"Время: {when}\n"
+            f"User: @{message.from_user.username or '-'} / {message.from_user.id}\n"
+            f"Payload: {payload}"
+        )
+
         await message.answer("✅ Спасибо! Платёж получен." if lang == "ru" else "✅ Thank you! Payment received.")
         return
 
     if t == "iftar" and unit == "portions":
         await kv_inc_int("iftar_raised_portions", val_i)
+        day = int(await kv_get("iftar_day") or "1")
+
+        await notify_admin(
+            "✅ Оплата Stars (ИФТАРЫ)\n"
+            f"День Рамадана: {day}\n"
+            f"Порций: {val_i}\n"
+            f"Stars: {stars_total}⭐ (курс 1€={rate}⭐)\n"
+            f"Время: {when}\n"
+            f"User: @{message.from_user.username or '-'} / {message.from_user.id}\n"
+            f"Payload: {payload}"
+        )
+
         await message.answer("✅ Спасибо! Платёж получен." if lang == "ru" else "✅ Thank you! Payment received.")
         return
 
+    await notify_admin(
+        "✅ Оплата Stars (неизвестный тип)\n"
+        f"Stars: {stars_total}⭐\n"
+        f"Время: {when}\n"
+        f"User: @{message.from_user.username or '-'} / {message.from_user.id}\n"
+        f"Payload: {payload}"
+    )
+    await message.answer("✅ Спасибо! Платёж получен." if lang == "ru" else "✅ Thank you! Payment received.")
 
-# ---------- Admin commands ----------
+
+# ---------------- Admin commands ----------------
 
 @dp.message(Command("set_rate"))
 async def cmd_set_rate(message: Message):
@@ -499,6 +591,7 @@ async def cmd_set_rate(message: Message):
     await kv_set("eur_to_stars", str(rate))
     await message.answer(f"OK. Новый курс: 1€ = {rate}⭐")
 
+
 @dp.message(Command("set_iftar_target"))
 async def cmd_set_iftar_target(message: Message):
     if not admin_only(message):
@@ -509,6 +602,7 @@ async def cmd_set_iftar_target(message: Message):
         return
     await kv_set("iftar_target_portions", str(int(parts[1])))
     await message.answer("OK")
+
 
 @dp.message(Command("set_iftar_day"))
 async def cmd_set_iftar_day(message: Message):
@@ -522,6 +616,7 @@ async def cmd_set_iftar_day(message: Message):
     await kv_set("iftar_raised_portions", "0")
     await message.answer("OK")
 
+
 @dp.message(Command("set_water_target"))
 async def cmd_set_water_target(message: Message):
     if not admin_only(message):
@@ -534,7 +629,7 @@ async def cmd_set_water_target(message: Message):
     await message.answer("OK")
 
 
-# ---------- Health server for Render ----------
+# ---------------- Health server for Render ----------------
 
 async def health_server():
     app = web.Application()
@@ -547,15 +642,18 @@ async def health_server():
     runner = web.AppRunner(app)
     await runner.setup()
 
-    port = int(os.getenv("PORT", "10000"))
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
 
+
+# ---------------- Main ----------------
 
 async def main():
     await db_init()
     await health_server()
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+
 
 if __name__ == "__main__":
     asyncio.run(main())
+
