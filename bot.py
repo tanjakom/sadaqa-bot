@@ -35,6 +35,11 @@ DB_PATH = "data.db"
 # user_id -> {"type": "water"|"iftar"}
 PENDING = {}
 
+from aiogram.types import Message
+
+@dp.channel_post()
+async def channel_logger(message: Message):
+    logging.info(f"ARCHIVE CHANNEL ID = {message.chat.id}")
 
 # ---------------- DB ----------------
 
