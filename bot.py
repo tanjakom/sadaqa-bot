@@ -30,7 +30,9 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or "0")
 PORT = int(os.getenv("PORT", "10000") or "10000")
-TIMEZONE = os.getenv("TIMEZONE", "UTC").strip() or "UTC"
+
+TIMEZONE = os.getenv("TIMEZONE", "Europe/Helsinki").strip() or "Europe/Helsinki"
+RAMADAN_START = os.getenv("RAMADAN_START", "").strip()  # YYYY-MM-DD (например 2026-02-18)
 
 # Optional: where to post public daily reports and ZF list.
 # If not set (0), bot will send reports to ADMIN only.
@@ -70,7 +72,8 @@ if not ADMIN_ID:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-DB_PATH = "data.db"
+# If you attach a Disk in Render, set DB_PATH=/var/data/data.db (recommended)
+DB_PATH = os.getenv("DB_PATH", "/var/data/data.db").strip() or "/var/data/data.db"
 
 # Pending state per user
 PENDING: dict[int, dict] = {}
@@ -105,7 +108,10 @@ def tzinfo():
     try:
         return ZoneInfo(TIMEZONE)
     except Exception:
-        return ZoneInfo("UTC")
+        try:
+            return ZoneInfo("UTC")
+        except Exception:
+            return None
 
 
 def now_local() -> datetime:
@@ -121,6 +127,21 @@ def today_local() -> date:
 
 def utc_now_str() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+
+def get_ramadan_day() -> int:
+    """
+    Auto-calc Ramadan day from RAMADAN_START (YYYY-MM-DD) in local TIMEZONE.
+    Day changes at 00:00 local time.
+    """
+    if not RAMADAN_START:
+        return 1
+    try:
+        start_date = datetime.strptime(RAMADAN_START, "%Y-%m-%d").date()
+        day = (today_local() - start_date).days + 1
+        return max(1, day)
+    except Exception:
+        return 1
 
 
 # =========================
@@ -194,8 +215,8 @@ async def db_init():
             username TEXT,
             label TEXT NOT NULL,
             people INTEGER NOT NULL,
-            bank_code TEXT NOT NULL,   -- e.g. "ZF5"
-            method TEXT NOT NULL       -- "bank"|"paypal"|"zen"|"crypto"|"swift"|"card"|"stars"
+            bank_code TEXT NOT NULL,
+            method TEXT NOT NULL
         )
         """)
 
@@ -208,6 +229,7 @@ async def db_init():
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('water_target_eur','235')")
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('water_raised_eur','0')")
 
+        # We keep iftar_day in DB for compatibility, but display uses get_ramadan_day()
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_day','1')")
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_target_portions','100')")
         await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_raised_portions','0')")
@@ -368,7 +390,6 @@ async def zf_list_text() -> str:
 
 async def zf_post_update():
     text = await zf_list_text()
-    # if group unknown -> send to admin
     if ZF_GROUP_ID:
         await send_md(ZF_GROUP_ID, text)
     else:
@@ -424,7 +445,9 @@ async def build_daily_report() -> str:
     water_raised = await kv_get_int("water_raised_eur", 0)
     water_rem = max(0, water_target - water_raised)
 
-    iftar_day = await kv_get_int("iftar_day", 1)
+    # IMPORTANT: Ramadan day auto
+    iftar_day = get_ramadan_day()
+
     iftar_target = await kv_get_int("iftar_target_portions", 100)
     iftar_raised = await kv_get_int("iftar_raised_portions", 0)
     iftar_rem = max(0, iftar_target - iftar_raised)
@@ -465,7 +488,6 @@ async def daily_report_tick():
 
     report = await build_daily_report()
 
-    # If group unknown -> admin only; otherwise also group
     if PUBLIC_GROUP_ID:
         await send_md(PUBLIC_GROUP_ID, report)
     await bot.send_message(ADMIN_ID, report, parse_mode="Markdown")
@@ -611,7 +633,6 @@ def kb_campaign_actions(lang: str):
 
 def kb_payment_methods(stars_enabled: bool):
     kb = InlineKeyboardBuilder()
-    # Names exactly as you want (human-readable)
     kb.button(text="🏦 Банковский перевод", callback_data="pay_bank")
     kb.button(text="🌍 SWIFT", callback_data="pay_swift")
     kb.button(text="💙 PayPal", callback_data="pay_paypal")
@@ -799,7 +820,7 @@ def code_for_campaign(uid: int) -> str:
     if c == "id":
         return MARK_ID
     if c == "zf":
-        return "ZF5"  # example; user will set their number
+        return "ZF5"
     return "SUPPORT"
 
 
@@ -814,7 +835,6 @@ async def cb_pay(call: CallbackQuery):
         await call.answer("Stars выключены", show_alert=True)
         return
 
-    # ZF special: we want user to use ZF5/ZF8 etc
     if campaign == "zf":
         base_text = (
             "🌾 *ZF — Закят-уль-Фитр*\n\n"
@@ -822,7 +842,6 @@ async def cb_pay(call: CallbackQuery):
             "2) В назначении укажите *ТОЛЬКО* `ZF5` / `ZF8` (цифра = кол-во людей)\n"
             "3) После оплаты нажмите кнопку ниже и внесите себя в список\n\n"
         )
-        # show method details using example ZF5 (they can change number)
         code_example = "ZF5"
         if method == "bank":
             txt = base_text + payment_text_bank(code_example)
@@ -843,7 +862,6 @@ async def cb_pay(call: CallbackQuery):
         await call.message.answer(txt, parse_mode="Markdown", reply_markup=kb_zf_after_payment())
         return
 
-    # ID special: mark is Id + optional amount notify
     if campaign == "id":
         code = MARK_ID
         base_text = "🍬 *Id — Ид аль-Фитр*\n\nОплатите и укажите *ТОЛЬКО* отметку.\n\n"
@@ -866,7 +884,6 @@ async def cb_pay(call: CallbackQuery):
         await call.message.answer(txt, parse_mode="Markdown", reply_markup=kb_id_after_payment())
         return
 
-    # Iftar / Water standard
     code = code_for_campaign(uid)
     title = "🍲 *Ифтары*" if campaign == "iftar" else "💧 *Вода*"
     base_text = f"{title}\n\nОплатите и укажите *ТОЛЬКО* отметку.\n\n"
@@ -904,7 +921,6 @@ async def cb_zf_mark(call: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "id_mark")
 async def cb_id_mark(call: CallbackQuery):
     uid = call.from_user.id
-    # Ask amount for internal accounting (optional but useful)
     PENDING[uid] = {"type": "id_wait_amount"}
     await call.answer()
     await call.message.answer("Введите сумму в евро (целое число), чтобы мы могли учесть (пример: 20):")
@@ -920,7 +936,6 @@ async def pending_router(message: Message):
         return
     raw = (message.text or "").strip()
 
-    # ZF: wait bank code ZF5
     if st.get("type") == "zf_wait_code":
         n = parse_zf_bank_code(raw)
         if not n:
@@ -933,7 +948,6 @@ async def pending_router(message: Message):
         await message.answer("Теперь напишите, как вас показать в списке (коротко):")
         return
 
-    # ZF: wait label
     if st.get("type") == "zf_wait_label":
         label = raw
         if len(label) < 2:
@@ -948,7 +962,6 @@ async def pending_router(message: Message):
 
         await zf_add_entry(uid, message.from_user.username or "-", label, people, bank_code, method)
 
-        # admin notify (with expected EUR for checking)
         eur = people * ZF_EUR_PER_PERSON
         kg = people * ZF_KG_PER_PERSON
         await send_admin_html(
@@ -969,7 +982,6 @@ async def pending_router(message: Message):
         await message.answer("✅ Записано. Джазак Аллаху хейр! 🤍")
         return
 
-    # ID: wait amount for internal accounting
     if st.get("type") == "id_wait_amount":
         try:
             eur = int(raw)
@@ -1076,7 +1088,6 @@ async def cmd_deactivate_stars(message: Message):
 async def cmd_set_desc(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
-    # /set_desc iftar <text>
     m = re.match(r"^/set_desc\s+(iftar|water|zf|id)\s+([\s\S]+)$", (message.text or "").strip())
     if not m:
         await message.answer("Использование: /set_desc iftar <текст>")
@@ -1097,7 +1108,6 @@ async def cmd_report_now(message: Message):
     await message.answer(report, parse_mode="Markdown")
 
 
-# Manual adds (outside bot)
 @dp.message(Command("add_iftar"))
 async def cmd_add_iftar(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -1153,10 +1163,8 @@ async def cmd_add_zf(message: Message):
     await message.answer("OK (ZF entry added + list updated)")
 
 
-# Get chat id helper
 @dp.message(Command("chat_id"))
 async def cmd_chat_id(message: Message):
-    # Works in private and group.
     await message.answer(f"chat_id = {message.chat.id}")
 
 
