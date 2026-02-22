@@ -1039,7 +1039,7 @@ async def cb_admin(call: CallbackQuery):
             "*Узнать chat_id группы*\n"
             "— добавьте бота в группу и напишите /chat_id\n"
         )
-        await call.message.answer(txt, parse_mode="Markdown")
+        await call.message.answer(txt, parse_mode="HTML")
         return
 
     if call.data == "adm_activate_stars":
