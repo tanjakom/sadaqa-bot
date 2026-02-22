@@ -184,7 +184,7 @@ async def send_md(chat_id: int, text_md: str):
     if not chat_id:
         return
     try:
-        await bot.send_message(chat_id, text_md, parse_mode="Markdown", disable_web_page_preview=True)
+        await bot.send_message(chat_id, text_md, disable_web_page_preview=True)
     except Exception:
         logging.exception("Failed to send to chat_id=%s", chat_id)
 
@@ -393,8 +393,7 @@ async def zf_post_update():
     if ZF_GROUP_ID:
         await send_md(ZF_GROUP_ID, text)
     else:
-        await bot.send_message(ADMIN_ID, text, parse_mode="Markdown")
-
+ext
 
 # =========================
 # SCHEDULE: open/close ZF & ID + daily reports
@@ -490,7 +489,7 @@ async def daily_report_tick():
 
     if PUBLIC_GROUP_ID:
         await send_md(PUBLIC_GROUP_ID, report)
-    await bot.send_message(ADMIN_ID, report, parse_mode="Markdown")
+    await bot.send_message(ADMIN_ID, report)
 
     await kv_set("last_daily_report_date", today_str)
 
@@ -744,7 +743,7 @@ async def cb_menus(call: CallbackQuery):
             f"— ZF: `ZF5` (цифра = люди)\n"
             f"— Id: `{MARK_ID}`\n"
         )
-        await safe_edit(call, txt, reply_markup=kb_main(lang, is_admin), parse_mode="Markdown")
+        await safe_edit(call, txt, reply_markup=kb_main(lang, is_admin))
         return
 
     if call.data == "admin_menu":
@@ -788,7 +787,7 @@ async def cb_campaign(call: CallbackQuery):
         desc = "—"
 
     await call.answer()
-    await safe_edit(call, desc, reply_markup=kb_campaign_actions(lang), parse_mode="Markdown")
+    await safe_edit(call, desc, reply_markup=kb_campaign_actions(lang))
 
 
 @dp.callback_query(lambda c: c.data == "pay_methods")
@@ -859,7 +858,7 @@ async def cb_pay(call: CallbackQuery):
             txt = base_text + "_Stars сейчас не используем для срочных сборов._"
 
         await call.answer()
-        await call.message.answer(txt, parse_mode="Markdown", reply_markup=kb_zf_after_payment())
+        await call.message.answer(txt, reply_markup=kb_zf_after_payment())
         return
 
     if campaign == "id":
@@ -881,7 +880,7 @@ async def cb_pay(call: CallbackQuery):
             txt = base_text + "_Stars: можно включить позже командой /activate_stars._"
 
         await call.answer()
-        await call.message.answer(txt, parse_mode="Markdown", reply_markup=kb_id_after_payment())
+        await call.message.answer(txt, reply_markup=kb_id_after_payment())
         return
 
     code = code_for_campaign(uid)
@@ -903,7 +902,7 @@ async def cb_pay(call: CallbackQuery):
         txt = base_text + "_Stars: можно включить позже командой /activate_stars._"
 
     await call.answer()
-    await call.message.answer(txt, parse_mode="Markdown")
+    await call.message.answer(txt)
 
 
 # =========================
@@ -915,7 +914,7 @@ async def cb_zf_mark(call: CallbackQuery):
     uid = call.from_user.id
     PENDING[uid] = {"type": "zf_wait_code"}
     await call.answer()
-    await call.message.answer("Пришлите код, который вы указали при оплате (пример: `ZF5`).", parse_mode="Markdown")
+    await call.message.answer("Пришлите код, который вы указали при оплате (пример: `ZF5`).")
 
 
 @dp.callback_query(lambda c: c.data == "id_mark")
@@ -939,7 +938,7 @@ async def pending_router(message: Message):
     if st.get("type") == "zf_wait_code":
         n = parse_zf_bank_code(raw)
         if not n:
-            await message.answer("Нужен код вида `ZF5` (или `ZF 5`, `ZF-5`). Попробуйте ещё раз:", parse_mode="Markdown")
+            await message.answer("Нужен код вида `ZF5` (или `ZF 5`, `ZF-5`). Попробуйте ещё раз:")
             return
         st["people"] = n
         st["bank_code"] = f"ZF{n}"
@@ -1059,7 +1058,7 @@ async def cb_admin(call: CallbackQuery):
         report = await build_daily_report()
         if PUBLIC_GROUP_ID:
             await send_md(PUBLIC_GROUP_ID, report)
-        await call.message.answer(report, parse_mode="Markdown")
+        await call.message.answer(report)
         return
 
     if call.data == "adm_show_my_id":
@@ -1105,7 +1104,7 @@ async def cmd_report_now(message: Message):
     report = await build_daily_report()
     if PUBLIC_GROUP_ID:
         await send_md(PUBLIC_GROUP_ID, report)
-    await message.answer(report, parse_mode="Markdown")
+    await message.answer(report)
 
 
 @dp.message(Command("add_iftar"))
