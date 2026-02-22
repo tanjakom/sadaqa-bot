@@ -161,7 +161,7 @@ def html_escape(s: str) -> str:
 
 
 def user_link_html(user_id: int) -> str:
-    return f'<a href="tg://user?id={user_id}">Написать</a>'
+    return f<a href="tg://user?id={user_id}">Написать</a>
 
 
 async def safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode=None):
@@ -175,7 +175,6 @@ async def send_admin_html(text_html: str):
     await bot.send_message(
         ADMIN_ID,
         text_html,
-        parse_mode="HTML",
         disable_web_page_preview=True,
     )
 
@@ -221,51 +220,51 @@ async def db_init():
         """)
 
         # payment toggles
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('stars_enabled','0')")  # OFF by default
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('manual_enabled','1')")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(stars_enabled,0)")  # OFF by default
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(manual_enabled,1)")
 
         # Campaign state (collective)
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('water_batch','1')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('water_target_eur','235')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('water_raised_eur','0')")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(water_batch,1)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(water_target_eur,235)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(water_raised_eur,0)")
 
         # We keep iftar_day in DB for compatibility, but display uses get_ramadan_day()
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_day','1')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_target_portions','100')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_raised_portions','0')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('iftar_day_date', ?)", (today_local().isoformat(),))
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(iftar_day,1)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(iftar_target_portions,100)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(iftar_raised_portions,0)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(iftar_day_date, ?)", (today_local().isoformat(),))
 
         # ZF/ID open/close (can be controlled by date or admin)
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('zf_open','0')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('id_open','0')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('zf_start','2026-03-10')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('zf_end','2026-03-20')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('id_start','2026-03-10')")
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('id_end','2026-03-20')")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(zf_open,0)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(id_open,0)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(zf_start,2026-03-10)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(zf_end,2026-03-20)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(id_start,2026-03-10)")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(id_end,2026-03-20)")
 
         # ID internal accounting (optional)
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('id_raised_eur','0')")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(id_raised_eur,0)")
 
         # Campaign descriptions editable by admin
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('desc_iftar', ?)", (
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(desc_iftar, ?)", (
             "🍲 *Программа ифтаров*\n"
             "Помогаем кормить людей в лагере.\n\n"
             f"Отметка для оплаты: *{MARK_IFTAR}*\n"
             "⚠️ Укажите *ТОЛЬКО* отметку сбора и ничего больше.",
         ))
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('desc_water', ?)", (
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(desc_water, ?)", (
             "💧 *Сукья-ль-ма (вода)*\n"
             "Раздача питьевой воды (цистерна 5000л).\n\n"
             f"Отметка для оплаты: *{MARK_WATER}*\n"
             "⚠️ Укажите *ТОЛЬКО* отметку сбора и ничего больше.",
         ))
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('desc_zf', ?)", (
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(desc_zf, ?)", (
             "🌾 *Закят-уль-Фитр (ZF)*\n"
             f"1 человек = {ZF_KG_PER_PERSON} кг (1 са`а), цена учёта: {ZF_EUR_PER_PERSON}€ / человек.\n\n"
             "Отметка для оплаты: *ZF5 / ZF8* (цифра = кол-во людей)\n"
             "⚠️ Укажите *ТОЛЬКО* отметку сбора и ничего больше.",
         ))
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('desc_id', ?)", (
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(desc_id, ?)", (
             "🍬 *Ид аль-Фитр (Id)*\n"
             "Сбор на сладости/выпечку детям в день праздника.\n\n"
             f"Отметка для оплаты: *{MARK_ID}*\n"
@@ -273,7 +272,7 @@ async def db_init():
         ))
 
         # daily report
-        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES('last_daily_report_date','')")
+        await db.execute("INSERT OR IGNORE INTO kv(k,v) VALUES(last_daily_report_date,)")
 
         await db.commit()
 
@@ -511,18 +510,18 @@ async def scheduler_loop():
 def warn_only_code(code: str) -> str:
     return (
         "⚠️ *Важно:* укажите *ТОЛЬКО* отметку сбора и ничего больше.\n"
-        f"Отметка:\n`{code}`"
+        f"Отметка:\n{code}"
     )
 
 
 def payment_text_bank(code: str) -> str:
-    bic = f"\nBIC:\n`{SEPA_BIC}`\n" if SEPA_BIC else ""
+    bic = f"\nBIC:\n{SEPA_BIC}\n" if SEPA_BIC else ""
     return (
         "🏦 *Банковский перевод*\n\n"
         "Получатель:\n"
-        f"`{SEPA_RECIPIENT}`\n\n"
+        f"{SEPA_RECIPIENT}\n\n"
         "IBAN:\n"
-        f"`{SEPA_IBAN}`\n"
+        f"{SEPA_IBAN}\n"
         f"{bic}\n"
         + warn_only_code(code)
     )
@@ -532,7 +531,7 @@ def payment_text_paypal(code: str) -> str:
     return (
         "💙 *PayPal*\n\n"
         "Ссылка:\n"
-        f"`{PAYPAL_LINK}`\n\n"
+        f"{PAYPAL_LINK}\n\n"
         + warn_only_code(code)
     )
 
@@ -540,38 +539,38 @@ def payment_text_paypal(code: str) -> str:
 def payment_text_zen_express(code: str) -> str:
     parts = ["⚡ *ZEN Express*\n"]
     if ZEN_NAME:
-        parts.append("Получатель:\n" + f"`{ZEN_NAME}`\n")
+        parts.append("Получатель:\n" + f"{ZEN_NAME}\n")
     if ZEN_PHONE:
-        parts.append("Телефон:\n" + f"`{ZEN_PHONE}`\n")
+        parts.append("Телефон:\n" + f"{ZEN_PHONE}\n")
     if ZEN_CARD:
-        parts.append("Карта:\n" + f"`{ZEN_CARD}`\n")
+        parts.append("Карта:\n" + f"{ZEN_CARD}\n")
     parts.append("\n" + warn_only_code(code))
     return "\n".join(parts)
 
 
 def payment_text_crypto(code: str) -> str:
-    usdt = f"USDT (TRC20):\n`{USDT_TRC20}`\n" if USDT_TRC20 else "USDT (TRC20):\n`—`\n"
-    usdc = f"USDC (ERC20):\n`{USDC_ERC20}`\n" if USDC_ERC20 else "USDC (ERC20):\n`—`\n"
+    usdt = f"USDT (TRC20):\n{USDT_TRC20}\n" if USDT_TRC20 else "USDT (TRC20):\n—\n"
+    usdc = f"USDC (ERC20):\n`{USDC_ERC20}`\n" if USDC_ERC20 else "USDC (ERC20):\n—\n"
     return (
         "💎 *Криптовалюта*\n\n"
         f"{usdt}\n{usdc}\n"
         + warn_only_code(code)
-        + "\n\nЕсли ваша биржа/кошелёк не поддерживает memo/назначение — просто отправьте оплату, а затем пришлите в бот код (например `ZF5`)."
+        + "\n\nЕсли ваша биржа/кошелёк не поддерживает memo/назначение — просто отправьте оплату, а затем пришлите в бот код (например ZF5)."
     )
 
 
 def payment_text_swift(code: str) -> str:
     parts = ["🌍 *SWIFT*\n"]
     if SWIFT_RECIPIENT:
-        parts.append("Получатель:\n" + f"`{SWIFT_RECIPIENT}`\n")
+        parts.append("Получатель:\n" + f"{SWIFT_RECIPIENT}\n")
     if SWIFT_BANK:
-        parts.append("Банк:\n" + f"`{SWIFT_BANK}`\n")
+        parts.append("Банк:\n" + f"{SWIFT_BANK}\n")
     if SWIFT_BANK_ADDRESS:
-        parts.append("Адрес банка:\n" + f"`{SWIFT_BANK_ADDRESS}`\n")
+        parts.append("Адрес банка:\n" + f"{SWIFT_BANK_ADDRESS}\n")
     if SWIFT_ACCOUNT:
-        parts.append("Счёт/IBAN:\n" + f"`{SWIFT_ACCOUNT}`\n")
+        parts.append("Счёт/IBAN:\n" + f"{SWIFT_ACCOUNT}\n")
     if SWIFT_BIC:
-        parts.append("BIC/SWIFT:\n" + f"`{SWIFT_BIC}`\n")
+        parts.append("BIC/SWIFT:\n" + f"{SWIFT_BIC}\n")
     parts.append("\n" + warn_only_code(code))
     return "\n".join(parts)
 
@@ -579,9 +578,9 @@ def payment_text_swift(code: str) -> str:
 def payment_text_card_to_card(code: str) -> str:
     parts = ["💳 *С карты на карту*\n"]
     if CARD_RECIPIENT:
-        parts.append("Получатель:\n" + f"`{CARD_RECIPIENT}`\n")
+        parts.append("Получатель:\n" + f"{CARD_RECIPIENT}\n")
     if CARD_NUMBER:
-        parts.append("Номер карты:\n" + f"`{CARD_NUMBER}`\n")
+        parts.append("Номер карты:\n" + f"{CARD_NUMBER}\n")
     parts.append("\n" + warn_only_code(code))
     if not (CARD_RECIPIENT or CARD_NUMBER):
         parts.append("\n(Реквизиты карты пока не заданы в env. Можно добавить позже.)")
@@ -732,16 +731,16 @@ async def cb_menus(call: CallbackQuery):
     if call.data == "help":
         await call.answer()
         txt = (
-            "❓ *Помощь*\n\n"
+            "❓ Помощь\n\n"
             "Логика:\n"
             "1) Выберите сбор\n"
             "2) Нажмите «Способы оплаты»\n"
-            "3) Скопируйте реквизиты и укажите *ТОЛЬКО* отметку сбора\n\n"
+            "3) Скопируйте реквизиты и укажите ТОЛЬКО отметку сбора\n\n"
             "Отметки:\n"
-            f"— Ифтары: `{MARK_IFTAR}`\n"
-            f"— Вода: `{MARK_WATER}`\n"
-            f"— ZF: `ZF5` (цифра = люди)\n"
-            f"— Id: `{MARK_ID}`\n"
+            f"— Ифтары: {MARK_IFTAR}\n"
+            f"— Вода: {MARK_WATER}\n"
+            f"— ZF: ZF5 (цифра = люди)\n"
+            f"— Id: {MARK_ID}\n"
         )
         await safe_edit(call, txt, reply_markup=kb_main(lang, is_admin))
         return
@@ -836,9 +835,9 @@ async def cb_pay(call: CallbackQuery):
 
     if campaign == "zf":
         base_text = (
-            "🌾 *ZF — Закят-уль-Фитр*\n\n"
+            "🌾 ZF — Закят-уль-Фитр\n\n"
             "1) Оплатите\n"
-            "2) В назначении укажите *ТОЛЬКО* `ZF5` / `ZF8` (цифра = кол-во людей)\n"
+            "2) В назначении укажите ТОЛЬКО ZF5 / ZF8 (цифра = кол-во людей)\n"
             "3) После оплаты нажмите кнопку ниже и внесите себя в список\n\n"
         )
         code_example = "ZF5"
@@ -863,7 +862,7 @@ async def cb_pay(call: CallbackQuery):
 
     if campaign == "id":
         code = MARK_ID
-        base_text = "🍬 *Id — Ид аль-Фитр*\n\nОплатите и укажите *ТОЛЬКО* отметку.\n\n"
+        base_text = "🍬 Id — Ид аль-Фитр\n\nОплатите и укажите ТОЛЬКО отметку.\n\n"
         if method == "bank":
             txt = base_text + payment_text_bank(code)
         elif method == "swift":
@@ -884,8 +883,8 @@ async def cb_pay(call: CallbackQuery):
         return
 
     code = code_for_campaign(uid)
-    title = "🍲 *Ифтары*" if campaign == "iftar" else "💧 *Вода*"
-    base_text = f"{title}\n\nОплатите и укажите *ТОЛЬКО* отметку.\n\n"
+    title = "🍲 Ифтары" if campaign == "iftar" else "💧 Вода"
+    base_text = f"{title}\n\nОплатите и укажите ТОЛЬКО отметку.\n\n"
     if method == "bank":
         txt = base_text + payment_text_bank(code)
     elif method == "swift":
@@ -914,7 +913,7 @@ async def cb_zf_mark(call: CallbackQuery):
     uid = call.from_user.id
     PENDING[uid] = {"type": "zf_wait_code"}
     await call.answer()
-    await call.message.answer("Пришлите код, который вы указали при оплате (пример: `ZF5`).")
+    await call.message.answer("Пришлите код, который вы указали при оплате (пример: ZF5).")
 
 
 @dp.callback_query(lambda c: c.data == "id_mark")
@@ -938,7 +937,7 @@ async def pending_router(message: Message):
     if st.get("type") == "zf_wait_code":
         n = parse_zf_bank_code(raw)
         if not n:
-            await message.answer("Нужен код вида `ZF5` (или `ZF 5`, `ZF-5`). Попробуйте ещё раз:")
+            await message.answer("Нужен код вида ZF5 (или ZF 5, ZF-5). Попробуйте ещё раз:")
             return
         st["people"] = n
         st["bank_code"] = f"ZF{n}"
@@ -970,7 +969,7 @@ async def pending_router(message: Message):
                 f"Bank code: <code>{html_escape(bank_code)}</code>",
                 f"People: {people} | expected {eur}€ | rice {kg} kg",
                 f"Time: {utc_now_str()}",
-                f"User: @{html_escape(message.from_user.username or '-') } / {uid}",
+                f"User: @{html_escape(message.from_user.username or -) } / {uid}",
                 user_link_html(uid),
             ])
         )
@@ -996,7 +995,7 @@ async def pending_router(message: Message):
                 "✅ ID MARKED",
                 f"Amount: {eur} EUR",
                 f"Time: {utc_now_str()}",
-                f"User: @{html_escape(message.from_user.username or '-') } / {uid}",
+                f"User: @{html_escape(message.from_user.username or -) } / {uid}",
                 user_link_html(uid),
             ])
         )
@@ -1019,27 +1018,27 @@ async def cb_admin(call: CallbackQuery):
     if call.data == "adm_help":
         await call.answer()
         txt = (
-            "🛠 *Админ-шпаргалка*\n\n"
-            "*Stars*\n"
-            "— /activate_stars\n"
-            "— /deactivate_stars\n\n"
-            "*Редактирование описаний*\n"
-            "— /set_desc iftar <текст>\n"
-            "— /set_desc water <текст>\n"
-            "— /set_desc zf <текст>\n"
-            "— /set_desc id <текст>\n\n"
-            "*Ручные начисления (вне бота)*\n"
-            "— /add_iftar 15\n"
-            "— /add_water 20\n"
-            "— /add_id 50\n"
-            '— /add_zf 5 "семья Умм Мухаммад"\n\n'
-            "*Отчёт*\n"
-            "— /report_now\n\n"
-            "*Узнать chat_id группы*\n"
-            "— добавьте бота в группу и напишите /chat_id\n"
-        )
-        await call.message.answer(txt, parse_mode="HTML")
-        return
+    "🛠 Админ-шпаргалка\n\n"
+    "Stars\n"
+    "— /activate_stars\n"
+    "— /deactivate_stars\n\n"
+    "Редактирование описаний\n"
+    "— /set_desc iftar <текст>\n"
+    "— /set_desc water <текст>\n"
+    "— /set_desc zf <текст>\n"
+    "— /set_desc id <текст>\n\n"
+    "Ручные начисления (вне бота)\n"
+    "— /add_iftar 15\n"
+    "— /add_water 20\n"
+    "— /add_id 50\n"
+    "— /add_zf 5 \"семья Умм Мухаммад\"\n\n"
+    "Отчёт\n"
+    "— /report_now\n\n"
+    "Узнать chat_id группы\n"
+    "— добавьте бота в группу и напишите /chat_id\n"
+)
+       await call.message.answer(txt)
+       return
 
     if call.data == "adm_activate_stars":
         await kv_set_int("stars_enabled", 1)
@@ -1149,10 +1148,10 @@ async def cmd_add_zf(message: Message):
         return
     m = re.match(r"^/add_zf\s+(\d+)\s+(.+)$", (message.text or "").strip())
     if not m:
-        await message.answer('Использование: /add_zf 5 "семья Умм Мухаммад"')
+        await message.answer(Использование: /add_zf 5 "семья Умм Мухаммад"')
         return
     people = int(m.group(1))
-    label = m.group(2).strip().strip('"').strip()
+    label = m.group(2).strip().strip(").strip()
     if people <= 0:
         await message.answer("People must be > 0")
         return
