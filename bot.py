@@ -1016,29 +1016,29 @@ async def cb_admin(call: CallbackQuery):
         return
 
     if call.data == "adm_help":
-        await call.answer()
-        txt = (
-    "🛠 Админ-шпаргалка\n\n"
-    "Stars\n"
-    "— /activate_stars\n"
-    "— /deactivate_stars\n\n"
-    "Редактирование описаний\n"
-    "— /set_desc iftar <текст>\n"
-    "— /set_desc water <текст>\n"
-    "— /set_desc zf <текст>\n"
-    "— /set_desc id <текст>\n\n"
-    "Ручные начисления (вне бота)\n"
-    "— /add_iftar 15\n"
-    "— /add_water 20\n"
-    "— /add_id 50\n"
-    "— /add_zf 5 \"семья Умм Мухаммад\"\n\n"
-    "Отчёт\n"
-    "— /report_now\n\n"
-    "Узнать chat_id группы\n"
-    "— добавьте бота в группу и напишите /chat_id\n"
-)
-       await call.message.answer(txt)
-       return
+    await call.answer()
+    txt = (
+        "🛠 Админ-шпаргалка\n\n"
+        "Stars\n"
+        "— /activate_stars\n"
+        "— /deactivate_stars\n\n"
+        "Редактирование описаний\n"
+        "— /set_desc iftar (текст)\n"
+        "— /set_desc water (текст)\n"
+        "— /set_desc zf (текст)\n"
+        "— /set_desc id (текст)\n\n"
+        "Ручные начисления (вне бота)\n"
+        "— /add_iftar 15\n"
+        "— /add_water 20\n"
+        "— /add_id 50\n"
+        "— /add_zf 5 \"семья Умм Мухаммад\"\n\n"
+        "Отчёт\n"
+        "— /report_now\n\n"
+        "Узнать chat_id группы\n"
+        "— добавьте бота в группу и напишите /chat_id\n"
+    )
+    await call.message.answer(txt)
+    return
 
     if call.data == "adm_activate_stars":
         await kv_set_int("stars_enabled", 1)
@@ -1142,24 +1142,7 @@ async def cmd_add_id(message: Message):
     await message.answer("OK")
 
 
-@dp.message(Command("add_zf"))
-async def cmd_add_zf(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    m = re.match(r"^/add_zf\s+(\d+)\s+(.+)$", (message.text or "").strip())
-    if not m:
-        await message.answer(Использование: /add_zf 5 "семья Умм Мухаммад"')
-        return
-    people = int(m.group(1))
-    label = m.group(2).strip().strip(").strip()
-    if people <= 0:
-        await message.answer("People must be > 0")
-        return
-
-    await zf_add_entry(message.from_user.id, message.from_user.username or "-", label, people, f"ZF{people}", "manual_by_admin")
-    await zf_post_update()
-    await message.answer("OK (ZF entry added + list updated)")
-
+cmd_add_zf
 
 @dp.message(Command("chat_id"))
 async def cmd_chat_id(message: Message):
