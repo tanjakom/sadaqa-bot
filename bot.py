@@ -1,4 +1,6 @@
 import os
+import re
+import html
 import logging
 import asyncio
 from datetime import datetime
@@ -22,6 +24,7 @@ PORT = int(os.getenv("PORT", "10000"))
 TZ = ZoneInfo("Europe/Helsinki")
 EUR_TO_STARS = int(os.getenv("EUR_TO_STARS", "50") or "50")
 
+# Payment details
 PAYPAL_LINK = os.getenv("PAYPAL_LINK", "")
 SEPA_RECIPIENT = os.getenv("SEPA_RECIPIENT", "")
 SEPA_IBAN = os.getenv("SEPA_IBAN", "")
@@ -42,8 +45,11 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_PATH = "data.db"
+
+# Pending states
 PENDING: dict[int, dict] = {}
 
+# Dates
 FITR_OPEN_DT = datetime(2026, 3, 9, 0, 0, tzinfo=TZ)
 FITR_PAYPAL_CLOSE_DT = datetime(2026, 3, 17, 23, 59, tzinfo=TZ)
 FITR_ZEN_CLOSE_DT = datetime(2026, 3, 18, 14, 0, tzinfo=TZ)
@@ -63,11 +69,11 @@ def now_hki() -> datetime:
 def t(lang: str, ru: str, en: str) -> str:
     return ru if lang == "ru" else en
 
-def user_link(user_id: int) -> str:
-    return f"tg://user?id={user_id}"
-
 def admin_only_user(user_id: int) -> bool:
     return bool(ADMIN_ID) and user_id == ADMIN_ID
+
+def user_link(user_id: int) -> str:
+    return f"tg://user?id={user_id}"
 
 def battery(current: int, total: int, width: int = 10) -> str:
     if total <= 0:
@@ -83,6 +89,23 @@ def done_list(s: str) -> list[int]:
 
 def done_str(lst: list[int]) -> str:
     return ",".join(map(str, sorted(set(lst))))
+
+def extract_positive_int(text: str) -> int | None:
+    if not text:
+        return None
+    m = re.search(r"\d+", text)
+    if not m:
+        return None
+    n = int(m.group())
+    return n if n > 0 else None
+
+def parse_fitr_code(code: str) -> int | None:
+    code = (code or "").strip().upper()
+    m = re.fullmatch(r"ZF(\d+)", code)
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if n > 0 else None
 
 async def safe_edit(call: CallbackQuery, text: str, reply_markup=None, parse_mode=None):
     try:
@@ -151,18 +174,21 @@ async def db_init():
             people_count INTEGER NOT NULL,
             amount_eur INTEGER NOT NULL,
             rice_kg INTEGER NOT NULL,
-            code TEXT NOT NULL
+            code TEXT NOT NULL,
+            comment TEXT NOT NULL
         )
         """)
 
         defaults = {
             "water_target_eur": "235",
             "water_raised_eur": "0",
+            "water_open_mode": "on",
 
             "iftar_day": "27",
             "iftar_target_portions": "800",
             "iftar_raised_portions": "0",
             "iftar_done_days": "",
+            "iftar_open_mode": "on",
 
             "fitr_saa_eur": "10",
             "fitr_raised_eur": "0",
@@ -183,30 +209,22 @@ async def db_init():
             "desc_iftar_en": "Collection for the current Ramadan iftar day.",
 
             "desc_fitr_ru": (
-                "Мы распределяем Закят-уль-Фитр в Газе и иногда для опоздавших "
-                "в палестинских лагерях Иордании.\n\n"
+                "Мы распределяем Закят-уль-Фитр в Газе и иногда для опоздавших в палестинских лагерях Иордании.\n\n"
                 "Сумма закят-уль-фитр: 10€ / 1 человек.\n"
                 "Это цена 1 са'а = 3 кг риса.\n\n"
                 "При переводе используйте код сбора: ZF и количество человек.\n"
                 "Пример: ZF5"
             ),
             "desc_fitr_en": (
-                "We distribute Zakat al-Fitr in Gaza and sometimes for late payers "
-                "in Palestinian camps in Jordan.\n\n"
+                "We distribute Zakat al-Fitr in Gaza and sometimes for late payers in Palestinian camps in Jordan.\n\n"
                 "Amount of zakat-ul-fitr: 10€ / 1 person.\n"
                 "Equal to price of 1 sa'a = 3 kg of rice.\n\n"
                 "With transferring use code of the campaign: ZF with number of persons.\n"
                 "Example: ZF5"
             ),
 
-            "desc_eid_ru": (
-                "Сбор на сладкую традиционную выпечку «кяки» "
-                "или что-то подобное, в честь праздника."
-            ),
-            "desc_eid_en": (
-                "Collection for traditional sweet pastry “kyaky” "
-                "or something similar for the holiday."
-            ),
+            "desc_eid_ru": "Сбор на сладкую традиционную выпечку «кяки» или что-то подобное, в честь праздника.",
+            "desc_eid_en": "Collection for traditional sweet pastry “kyaky” or something similar for the holiday.",
         }
 
         for k, v in defaults.items():
@@ -283,14 +301,14 @@ async def add_manual_payment(user_id: int, username: str, method: str, campaign:
         return cur.lastrowid
 
 async def add_fitr_person(user_id: int, username: str, method: str, display_name: str, country: str, city: str,
-                          people_count: int, amount_eur: int, code: str) -> int:
+                          people_count: int, amount_eur: int, code: str, comment: str = "") -> int:
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     rice_kg = people_count * 3
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO fitr_people(ts,user_id,username,method,display_name,country,city,people_count,amount_eur,rice_kg,code) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (ts, user_id, username or "", method, display_name, country, city, people_count, amount_eur, rice_kg, code),
+            "INSERT INTO fitr_people(ts,user_id,username,method,display_name,country,city,people_count,amount_eur,rice_kg,code,comment) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (ts, user_id, username or "", method, display_name, country, city, people_count, amount_eur, rice_kg, code, comment),
         )
         await db.commit()
         return cur.lastrowid
@@ -322,21 +340,21 @@ async def fitr_report_if_needed():
             f"Rice: {total_kg} kg"
         )
 
-async def get_fitr_rows(limit: int = 100) -> list[tuple]:
+async def get_fitr_rows(limit: int = 200) -> list[tuple]:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT id,display_name,country,city,amount_eur,code,rice_kg,method FROM fitr_people ORDER BY id ASC LIMIT ?",
+            "SELECT id,display_name,country,city,amount_eur,code,rice_kg,method,comment FROM fitr_people ORDER BY id ASC LIMIT ?",
             (limit,),
         ) as cur:
             return await cur.fetchall()
 
 async def update_fitr_row(row_id: int, display_name: str, country: str, city: str,
-                          people_count: int, amount_eur: int, method: str, code: str):
+                          people_count: int, amount_eur: int, method: str, code: str, comment: str = ""):
     rice_kg = people_count * 3
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE fitr_people SET display_name=?, country=?, city=?, people_count=?, amount_eur=?, rice_kg=?, method=?, code=? WHERE id=?",
-            (display_name, country, city, people_count, amount_eur, rice_kg, method, code, row_id),
+            "UPDATE fitr_people SET display_name=?, country=?, city=?, people_count=?, amount_eur=?, rice_kg=?, method=?, code=?, comment=? WHERE id=?",
+            (display_name, country, city, people_count, amount_eur, rice_kg, method, code, comment, row_id),
         )
         await db.commit()
 
@@ -344,6 +362,33 @@ async def delete_fitr_row(row_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM fitr_people WHERE id=?", (row_id,))
         await db.commit()
+
+async def find_fitr_rows(term: str) -> list[tuple]:
+    q = f"%{term}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id,display_name,country,city,amount_eur,code,rice_kg,method FROM fitr_people "
+            "WHERE display_name LIKE ? OR country LIKE ? OR city LIKE ? OR code LIKE ? ORDER BY id ASC LIMIT 50",
+            (q, q, q, q),
+        ) as cur:
+            return await cur.fetchall()
+
+async def possible_fitr_dups() -> list[tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT a.id, a.display_name, a.code, b.id, b.display_name, b.code
+            FROM fitr_people a
+            JOIN fitr_people b
+              ON a.id < b.id
+             AND (
+                 (a.display_name = b.display_name AND a.code = b.code)
+                 OR (a.amount_eur = b.amount_eur AND a.code = b.code)
+             )
+            LIMIT 50
+            """
+        ) as cur:
+            return await cur.fetchall()
 
 async def reset_test_data():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -354,7 +399,17 @@ async def reset_test_data():
         await db.commit()
 
 
-# ================= Open/close logic =================
+# =========================
+# Open/close logic
+# =========================
+
+async def is_mode_open(key: str, default_auto: bool = True) -> bool:
+    mode = (await kv_get(key) or "auto").lower()
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    return default_auto
 
 async def is_fitr_visible() -> bool:
     mode = (await kv_get("fitr_open_mode") or "auto").lower()
@@ -392,7 +447,9 @@ async def is_eid_open() -> bool:
     return EID_OPEN_DT <= now_hki() <= close_dt
 
 
-# ================= Text builders =================
+# =========================
+# Text builders
+# =========================
 
 async def water_text(lang: str) -> str:
     target = int(await kv_get("water_target_eur") or "235")
@@ -400,7 +457,7 @@ async def water_text(lang: str) -> str:
     desc = await kv_get(f"desc_water_{lang}")
     bar = battery(raised, target)
     remain = max(0, target - raised)
-    code = "GREENMAX"
+    code = "Greenmax"
     if lang == "ru":
         return (
             "💧 *Сукья-ль-ма (вода)*\n\n"
@@ -409,7 +466,7 @@ async def water_text(lang: str) -> str:
             f"Собрано: *{raised}€*\n"
             f"Осталось: *{remain}€*\n"
             f"{bar}\n\n"
-            f"Код: `{code}`"
+            f"Код оплаты: `{code}`"
         )
     return (
         "💧 *Sukya-l-ma (Water)*\n\n"
@@ -418,7 +475,7 @@ async def water_text(lang: str) -> str:
         f"Raised: *{raised}€*\n"
         f"Remaining: *{remain}€*\n"
         f"{bar}\n\n"
-        f"Code: `{code}`"
+        f"Payment code: `{code}`"
     )
 
 async def iftar_text(lang: str) -> str:
@@ -428,7 +485,6 @@ async def iftar_text(lang: str) -> str:
     desc = await kv_get(f"desc_iftar_{lang}")
     done = done_list(await kv_get("iftar_done_days"))
     bar = battery(min(raised, target), target)
-    code = "Mimax"
     if lang == "ru":
         done_line = f"\nЗакрытые дни: {', '.join(map(str, done))}" if done else ""
         return (
@@ -439,7 +495,7 @@ async def iftar_text(lang: str) -> str:
             f"{bar}\n"
             f"{done_line}\n\n"
             "Цена порции: *4€*\n"
-            f"Код оплаты: `{code}`"
+            "Код оплаты: `Mimax`"
         )
     done_line = f"\nClosed days: {', '.join(map(str, done))}" if done else ""
     return (
@@ -450,7 +506,7 @@ async def iftar_text(lang: str) -> str:
         f"{bar}\n"
         f"{done_line}\n\n"
         "Portion price: *4€*\n"
-        f"Payment code: `{code}`"
+        "Payment code: `Mimax`"
     )
 
 async def fitr_text(lang: str) -> str:
@@ -507,7 +563,9 @@ async def eid_text(lang: str) -> str:
     return s
 
 
-# ================= Keyboards =================
+# =========================
+# Keyboards
+# =========================
 
 def kb_lang_select():
     kb = InlineKeyboardBuilder()
@@ -518,7 +576,7 @@ def kb_lang_select():
 
 def kb_campaigns(lang: str, show_fitr: bool, show_eid: bool):
     kb = InlineKeyboardBuilder()
-    kb.button(text=t(lang, "💧 Вода (GREENMAX)", "💧 Water (GREENMAX)"), callback_data="camp_water")
+    kb.button(text=t(lang, "💧 Вода (Greenmax)", "💧 Water (Greenmax)"), callback_data="camp_water")
     kb.button(text=t(lang, "🍲 Ифтары (Mimax)", "🍲 Iftars (Mimax)"), callback_data="camp_iftar")
     if show_fitr:
         kb.button(text=t(lang, "🕌 Закят-уль-Фитр (ZF)", "🕌 Zakat al-Fitr (ZF)"), callback_data="camp_fitr")
@@ -532,8 +590,8 @@ def kb_admin_tools(lang: str, campaign: str):
     kb = InlineKeyboardBuilder()
     kb.button(text=t(lang, "✏️ Править RU", "✏️ Edit RU"), callback_data=f"admin_edit|{campaign}|ru")
     kb.button(text=t(lang, "✏️ Править EN", "✏️ Edit EN"), callback_data=f"admin_edit|{campaign}|en")
-    kb.button(text=t(lang, "↩️ Сбросить последнее", "↩️ Undo last"), callback_data="admin_undo_text")
-    kb.button(text=t(lang, "🧪 Сброс", "🧪 Reset"), callback_data="admin_reset_test")
+    kb.button(text=t(lang, "↩️ Откатить текст", "↩️ Undo text"), callback_data="admin_undo_text")
+    kb.button(text=t(lang, "🧪 Сброс теста", "🧪 Reset test"), callback_data="admin_reset_test")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -563,6 +621,7 @@ def kb_amounts_eur(lang: str, campaign: str, amounts: list[int], extra_buttons: 
             kb.button(text=txt, callback_data=data)
     kb.button(text=t(lang, "Другая сумма", "Other amount"), callback_data=f"amt|{campaign}|eur|other")
     kb.button(text=t(lang, "Способы оплаты", "Payment methods"), callback_data=f"back_to_pm|{campaign}")
+    kb.button(text=t(lang, "Сброс", "Reset"), callback_data="reset_flow")
     kb.adjust(2, 2, 1, 1, 1)
     return kb.as_markup()
 
@@ -572,11 +631,11 @@ def kb_iftar_options(lang: str, is_admin: bool, closed100: bool, remain_portions
         kb.button(text=t(lang, f"{n} порций", f"{n} portions"), callback_data=f"amt|iftar|portions|{n}")
     kb.button(text=t(lang, "Указать порции", "Custom portions"), callback_data="amt|iftar|portions|other")
     kb.button(text=t(lang, "Указать сумму", "Custom amount"), callback_data="amt|iftar|eur|other")
-    kb.button(text=t(lang, "Оплатить остаток", "Pay remaining"),
-              callback_data=f"amt|iftar|portions|{max(1, remain_portions)}")
+    kb.button(text=t(lang, "Оплатить остаток", "Pay remaining"), callback_data=f"amt|iftar|portions|{max(1, remain_portions)}")
     if is_admin and closed100:
         kb.button(text=t(lang, "➕ +50 порций", "➕ +50 portions"), callback_data="admin_iftar_plus50")
     kb.button(text=t(lang, "Способы оплаты", "Payment methods"), callback_data="back_to_pm|iftar")
+    kb.button(text=t(lang, "Сброс", "Reset"), callback_data="reset_flow")
     kb.adjust(2, 2, 1, 1, 1, 1)
     return kb.as_markup()
 
@@ -586,6 +645,7 @@ def kb_fitr_members(lang: str):
         kb.button(text=t(lang, f"{n} человек", f"{n} people"), callback_data=f"amt|fitr|people|{n}")
     kb.button(text=t(lang, "Другое количество", "Other qty"), callback_data="amt|fitr|people|other")
     kb.button(text=t(lang, "Способы оплаты", "Payment methods"), callback_data="back_to_pm|fitr")
+    kb.button(text=t(lang, "Сброс", "Reset"), callback_data="reset_flow")
     kb.adjust(2, 2, 1, 1)
     return kb.as_markup()
 
@@ -617,6 +677,7 @@ def kb_hidden_payment_details(lang: str, campaign: str, method: str, amount_eur:
     kb.button(text=t(lang, "📋 Скопировать код", "📋 Copy code"), callback_data=f"copy_note|{note}")
     kb.button(text=t(lang, "✅ Оплатил", "✅ Paid"), callback_data=f"manual_sent|{method}|{campaign}|{amount_eur}|{note}")
     kb.button(text=t(lang, "⬅️ Назад", "⬅️ Back"), callback_data=f"back_to_pm|{campaign}")
+    kb.button(text=t(lang, "Сброс", "Reset"), callback_data="reset_flow")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -625,11 +686,14 @@ def kb_fitr_name_format(lang: str):
     kb.button(text=t(lang, "Умм …", "Umm …"), callback_data="fitr_fmt_umm")
     kb.button(text=t(lang, "Абу …", "Abu …"), callback_data="fitr_fmt_abu")
     kb.button(text=t(lang, "Имя …", "Name …"), callback_data="fitr_fmt_name")
+    kb.button(text=t(lang, "Сброс", "Reset"), callback_data="reset_flow")
     kb.adjust(1)
     return kb.as_markup()
 
 
-# ================= Start / campaign flow =================
+# =========================
+# Public navigation
+# =========================
 
 @dp.message(Command("start"))
 async def start(message: Message):
@@ -639,8 +703,42 @@ async def start(message: Message):
         return
     show_fitr = await is_fitr_visible()
     show_eid = await is_eid_open()
-    await message.answer(t(lang, "Выберите сбор:", "Choose campaign:"),
-                         reply_markup=kb_campaigns(lang, show_fitr, show_eid))
+    await message.answer(t(lang, "Выберите сбор:", "Choose campaign:"), reply_markup=kb_campaigns(lang, show_fitr, show_eid))
+
+@dp.message(Command("fitr"))
+async def cmd_fitr_short(message: Message):
+    lang = await get_user_lang(message.from_user.id) or "ru"
+    await message.answer(await fitr_text(lang), parse_mode="Markdown", reply_markup=kb_fitr_members(lang))
+
+@dp.message(Command("iftars"))
+async def cmd_iftars_short(message: Message):
+    lang = await get_user_lang(message.from_user.id) or "ru"
+    raised = int(await kv_get("iftar_raised_portions") or "0")
+    target = int(await kv_get("iftar_target_portions") or "800")
+    await message.answer(
+        await iftar_text(lang),
+        parse_mode="Markdown",
+        reply_markup=kb_iftar_options(lang, admin_only_user(message.from_user.id), raised >= 100, max(1, target - raised)),
+    )
+
+@dp.message(Command("water"))
+async def cmd_water_short(message: Message):
+    lang = await get_user_lang(message.from_user.id) or "ru"
+    raised = int(await kv_get("water_raised_eur") or "0")
+    remain = max(0, 235 - raised)
+    await message.answer(
+        await water_text(lang),
+        parse_mode="Markdown",
+        reply_markup=kb_amounts_eur(lang, "water", [10, 25, 50], [
+            (t(lang, "Индивидуально — 235€", "Individual — 235€"), "amt|water|eur|235"),
+            (t(lang, f"Оплатить остаток — {remain}€", f"Pay remaining — {remain}€"), f"amt|water|eur|{remain}")
+        ])
+    )
+
+@dp.message(Command("eid"))
+async def cmd_eid_short(message: Message):
+    lang = await get_user_lang(message.from_user.id) or "ru"
+    await message.answer(await eid_text(lang), parse_mode="Markdown", reply_markup=kb_amounts_eur(lang, "eid", [5, 10, 25, 50]))
 
 @dp.callback_query(F.data.in_({"lang_ru", "lang_en"}))
 async def choose_lang(call: CallbackQuery):
@@ -649,20 +747,21 @@ async def choose_lang(call: CallbackQuery):
     await call.answer()
     show_fitr = await is_fitr_visible()
     show_eid = await is_eid_open()
-    await safe_edit(call, t(lang, "Выберите сбор:", "Choose campaign:"),
-                    reply_markup=kb_campaigns(lang, show_fitr, show_eid))
+    await safe_edit(call, t(lang, "Выберите сбор:", "Choose campaign:"), reply_markup=kb_campaigns(lang, show_fitr, show_eid))
 
-@dp.callback_query(F.data.in_({"go_lang", "go_campaigns"}))
-async def go_basic(call: CallbackQuery):
+@dp.callback_query(F.data.in_({"go_lang", "go_campaigns", "reset_flow"}))
+async def basic_nav(call: CallbackQuery):
     lang = await get_user_lang(call.from_user.id) or "ru"
     await call.answer()
     if call.data == "go_lang":
+        PENDING.pop(call.from_user.id, None)
         await safe_edit(call, "Мир вам! Выберите язык дальнейшего общения", reply_markup=kb_lang_select())
         return
+    if call.data == "reset_flow":
+        PENDING.pop(call.from_user.id, None)
     show_fitr = await is_fitr_visible()
     show_eid = await is_eid_open()
-    await safe_edit(call, t(lang, "Выберите сбор:", "Choose campaign:"),
-                    reply_markup=kb_campaigns(lang, show_fitr, show_eid))
+    await safe_edit(call, t(lang, "Выберите сбор:", "Choose campaign:"), reply_markup=kb_campaigns(lang, show_fitr, show_eid))
 
 @dp.callback_query(F.data.in_({"camp_water", "camp_iftar", "camp_fitr", "camp_eid"}))
 async def open_campaign(call: CallbackQuery):
@@ -670,95 +769,55 @@ async def open_campaign(call: CallbackQuery):
     await call.answer()
 
     if call.data == "camp_water":
-        txt = await water_text(lang)
         raised = int(await kv_get("water_raised_eur") or "0")
         remain = max(0, 235 - raised)
-        kb = kb_amounts_eur(lang, "water", [10, 25, 50], [
-            (t(lang, "Индивидуально — 235€", "Individual — 235€"), "amt|water|eur|235"),
-            (t(lang, f"Оплатить остаток — {remain}€", f"Pay remaining — {remain}€"), f"amt|water|eur|{remain}")
-        ])
+        await safe_edit(
+            call,
+            await water_text(lang),
+            parse_mode="Markdown",
+            reply_markup=kb_amounts_eur(lang, "water", [10, 25, 50], [
+                (t(lang, "Индивидуально — 235€", "Individual — 235€"), "amt|water|eur|235"),
+                (t(lang, f"Оплатить остаток — {remain}€", f"Pay remaining — {remain}€"), f"amt|water|eur|{remain}")
+            ])
+        )
         if admin_only_user(call.from_user.id):
-            await safe_edit(call, txt, parse_mode="Markdown", reply_markup=kb)
             await call.message.answer("Admin", reply_markup=kb_admin_tools(lang, "water"))
-            return
-        await safe_edit(call, txt, parse_mode="Markdown", reply_markup=kb)
         return
 
     if call.data == "camp_iftar":
-        txt = await iftar_text(lang)
         raised = int(await kv_get("iftar_raised_portions") or "0")
         target = int(await kv_get("iftar_target_portions") or "800")
-        remain_portions = max(1, target - raised)
-        kb = kb_iftar_options(lang, admin_only_user(call.from_user.id), raised >= 100, remain_portions)
+        await safe_edit(
+            call,
+            await iftar_text(lang),
+            parse_mode="Markdown",
+            reply_markup=kb_iftar_options(lang, admin_only_user(call.from_user.id), raised >= 100, max(1, target - raised))
+        )
         if admin_only_user(call.from_user.id):
-            await safe_edit(call, txt, parse_mode="Markdown", reply_markup=kb)
             await call.message.answer("Admin", reply_markup=kb_admin_tools(lang, "iftar"))
-            return
-        await safe_edit(call, txt, parse_mode="Markdown", reply_markup=kb)
         return
 
     if call.data == "camp_fitr":
-        txt = await fitr_text(lang)
-        kb = kb_fitr_members(lang)
+        await safe_edit(call, await fitr_text(lang), parse_mode="Markdown", reply_markup=kb_fitr_members(lang))
         if admin_only_user(call.from_user.id):
-            await safe_edit(call, txt, parse_mode="Markdown", reply_markup=kb)
             await call.message.answer("Admin", reply_markup=kb_admin_tools(lang, "fitr"))
-            return
-        await safe_edit(call, txt, parse_mode="Markdown", reply_markup=kb)
         return
 
-    txt = await eid_text(lang)
-    kb = kb_amounts_eur(lang, "eid", [5, 10, 25, 50])
+    await safe_edit(call, await eid_text(lang), parse_mode="Markdown", reply_markup=kb_amounts_eur(lang, "eid", [5, 10, 25, 50]))
     if admin_only_user(call.from_user.id):
-        await safe_edit(call, txt, parse_mode="Markdown", reply_markup=kb)
         await call.message.answer("Admin", reply_markup=kb_admin_tools(lang, "eid"))
-        return
-    await safe_edit(call, txt, parse_mode="Markdown", reply_markup=kb)
 
 
-# ================= Admin editing / reset =================
-
-@dp.callback_query(F.data.startswith("admin_edit|"))
-async def admin_edit_start(call: CallbackQuery):
-    if not admin_only_user(call.from_user.id):
-        await call.answer()
-        return
-    _, campaign, lang = call.data.split("|")
-    key = f"desc_{campaign}_{lang}"
-    current = await kv_get(key)
-    PENDING[call.from_user.id] = {"kind": "edit_text", "key": key}
-    await call.answer()
-    await call.message.answer(f"Текущий текст `{key}`:\n\n{current}\n\nОтправьте новый текст одним сообщением.", parse_mode="Markdown")
-
-@dp.callback_query(F.data == "admin_undo_text")
-async def admin_undo_text(call: CallbackQuery):
-    if not admin_only_user(call.from_user.id):
-        await call.answer()
-        return
-    ok = await undo_last_text_change()
-    await call.answer("OK" if ok else "No changes", show_alert=True)
-
-@dp.callback_query(F.data == "admin_reset_test")
-async def admin_reset_test(call: CallbackQuery):
-    if not admin_only_user(call.from_user.id):
-        await call.answer()
-        return
-    await reset_test_data()
-    await call.answer("OK", show_alert=True)
-
-
-# ================= Back to payment methods =================
+# =========================
+# Payment method selection
+# =========================
 
 @dp.callback_query(F.data.startswith("back_to_pm|"))
 async def back_to_pm(call: CallbackQuery):
     lang = await get_user_lang(call.from_user.id) or "ru"
     campaign = call.data.split("|")[1]
     await call.answer()
-    await safe_edit(call, t(lang, "Выберите способ оплаты:", "Choose payment method:"),
-                    reply_markup=kb_choose_payment(lang, campaign))
-
-
-# ================= Payment method after campaign =================
+    await safe_edit(call, t(lang, "Выберите способ оплаты:", "Choose payment method:"), reply_markup=kb_choose_payment(lang, campaign))
 
 @dp.callback_query(F.data.startswith("pm|"))
 async def choose_payment_method(call: CallbackQuery):
@@ -774,11 +833,11 @@ async def choose_payment_method(call: CallbackQuery):
             await call.message.answer(fitr_close_text(method, lang))
             return
         PENDING[call.from_user.id] = {"campaign": "fitr", "method": method}
-        await call.message.answer(t(lang, "Теперь выберите количество членов семьи.", "Now choose number of family members."),
-                                  reply_markup=kb_fitr_members(lang))
+        await call.message.answer(t(lang, "Теперь выберите количество членов семьи.", "Now choose number of family members."), reply_markup=kb_fitr_members(lang))
         return
 
     PENDING[call.from_user.id] = {"campaign": campaign, "method": method}
+
     if campaign == "water":
         raised = int(await kv_get("water_raised_eur") or "0")
         remain = max(0, 235 - raised)
@@ -789,22 +848,24 @@ async def choose_payment_method(call: CallbackQuery):
                 (t(lang, f"Оплатить остаток — {remain}€", f"Pay remaining — {remain}€"), f"amt|water|eur|{remain}")
             ])
         )
-    elif campaign == "iftar":
+        return
+
+    if campaign == "iftar":
         raised = int(await kv_get("iftar_raised_portions") or "0")
         target = int(await kv_get("iftar_target_portions") or "800")
-        remain_portions = max(1, target - raised)
         await call.message.answer(
             t(lang, "Теперь выберите количество порций или сумму.", "Now choose portions or amount."),
-            reply_markup=kb_iftar_options(lang, admin_only_user(call.from_user.id), raised >= 100, remain_portions)
+            reply_markup=kb_iftar_options(lang, admin_only_user(call.from_user.id), raised >= 100, max(1, target - raised))
         )
-    elif campaign == "eid":
-        await call.message.answer(
-            t(lang, "Теперь выберите сумму.", "Now choose amount."),
-            reply_markup=kb_amounts_eur(lang, "eid", [5, 10, 25, 50])
-        )
+        return
+
+    if campaign == "eid":
+        await call.message.answer(t(lang, "Теперь выберите сумму.", "Now choose amount."), reply_markup=kb_amounts_eur(lang, "eid", [5, 10, 25, 50]))
 
 
-# ================= Amount selection =================
+# =========================
+# Amount/people selection
+# =========================
 
 @dp.callback_query(F.data.startswith("amt|"))
 async def choose_amount(call: CallbackQuery):
@@ -815,44 +876,20 @@ async def choose_amount(call: CallbackQuery):
     await call.answer()
 
     if val == "other":
+        if campaign == "fitr":
+            PENDING[call.from_user.id] = {"kind": "other_members", "method": method}
+            await call.message.answer(t(lang, "Введите только число. Пример: 5", "Enter only a number. Example: 5"))
+            return
         if campaign == "iftar" and unit == "portions":
             PENDING[call.from_user.id] = {"kind": "other_portions", "method": method}
-            await call.message.answer(t(lang, "Введите количество порций:", "Enter number of portions:"))
+            await call.message.answer(t(lang, "Введите только число. Пример: 20", "Enter only a number. Example: 20"))
             return
         if campaign == "iftar" and unit == "eur":
             PENDING[call.from_user.id] = {"kind": "other_iftar_eur", "method": method}
-            await call.message.answer(t(lang, "Введите сумму в евро:", "Enter amount in EUR:"))
-            return
-        if campaign == "fitr":
-            PENDING[call.from_user.id] = {"kind": "other_members", "method": method}
-            await call.message.answer(t(lang, "Введите количество членов семьи:", "Enter number of family members:"))
+            await call.message.answer(t(lang, "Введите только число. Пример: 50", "Enter only a number. Example: 50"))
             return
         PENDING[call.from_user.id] = {"kind": "other_eur", "campaign": campaign, "method": method}
-        await call.message.answer(t(lang, "Введите сумму в евро:", "Enter amount in EUR:"))
-        return
-
-    if campaign == "water":
-        eur = int(val)
-        note = "GREENMAX"
-        await handle_payment_step(call, lang, method, campaign, eur, note)
-        return
-
-    if campaign == "eid":
-        eur = int(val)
-        note = "Id"
-        await handle_payment_step(call, lang, method, campaign, eur, note)
-        return
-
-    if campaign == "iftar":
-        if unit == "eur":
-            eur = int(val)
-            portions = max(1, eur // 4)
-        else:
-            portions = int(val)
-            eur = portions * 4
-        note = "Mimax"
-        extra = t(lang, f"Порций: *{portions}*", f"Portions: *{portions}*")
-        await handle_payment_step(call, lang, method, campaign, eur, note, extra)
+        await call.message.answer(t(lang, "Введите только число. Пример: 25", "Enter only a number. Example: 25"))
         return
 
     if campaign == "fitr":
@@ -866,14 +903,42 @@ async def choose_amount(call: CallbackQuery):
             f"Вам необходимо раздать: *{kg} кг*\nСумма к оплате: *{eur}€*\nКод оплаты: `{note}`",
             f"You need to distribute: *{kg} kg*\nAmount to pay: *{eur}€*\nPayment code: `{note}`"
         )
-        await call.message.answer(
-            summary,
-            parse_mode="Markdown",
-            reply_markup=kb_hidden_payment_details(lang, campaign, method, eur, note)
-        )
+        await call.message.answer(summary, parse_mode="Markdown", reply_markup=kb_hidden_payment_details(lang, "fitr", method, eur, note))
+        return
+
+    if campaign == "water":
+        eur = int(val)
+        note = "Greenmax"
+        await handle_payment_step(call, lang, method, "water", eur, note)
+        return
+
+    if campaign == "eid":
+        eur = int(val)
+        note = "Id"
+        await handle_payment_step(call, lang, method, "eid", eur, note)
+        return
+
+    if campaign == "iftar":
+        if unit == "eur":
+            eur = int(val)
+            portions = max(1, eur // 4)
+        else:
+            portions = int(val)
+            eur = portions * 4
+        note = "Mimax"
+        extra = t(lang, f"Порций: *{portions}*", f"Portions: *{portions}*")
+        await handle_payment_step(call, lang, method, "iftar", eur, note, extra)
         return
 
 async def handle_payment_step(call: CallbackQuery, lang: str, method: str, campaign: str, eur: int, note: str, extra: str = ""):
+    if campaign == "fitr":
+        if method not in {"paypal", "zenbank", "zenfast"}:
+            await call.message.answer(t(lang, "Для Закят-уль-Фитр доступны только PayPal, Zen и Zen Express.", "Only PayPal, Zen and Zen Express are available for Zakat al-Fitr."))
+            return
+        if not fitr_method_open(method):
+            await call.message.answer(fitr_close_text(method, lang))
+            return
+
     if method == "stars":
         title_map = {
             "water": t(lang, "Сукья-ль-ма (вода)", "Sukya-l-ma (Water)"),
@@ -915,7 +980,9 @@ async def handle_payment_step(call: CallbackQuery, lang: str, method: str, campa
     )
 
 
-# ================= Hidden payment details =================
+# =========================
+# Hidden detail buttons
+# =========================
 
 @dp.callback_query(F.data.in_({
     "show_sepa_recipient", "show_sepa_iban", "show_sepa_bic",
@@ -926,7 +993,6 @@ async def handle_payment_step(call: CallbackQuery, lang: str, method: str, campa
 async def show_hidden_detail(call: CallbackQuery):
     lang = await get_user_lang(call.from_user.id) or "ru"
     await call.answer()
-
     mapping = {
         "show_sepa_recipient": SEPA_RECIPIENT,
         "show_sepa_iban": SEPA_IBAN,
@@ -953,7 +1019,9 @@ async def copy_note(call: CallbackQuery):
     await call.message.answer(f"`{note}`", parse_mode="Markdown")
 
 
-# ================= Paid / list flow =================
+# =========================
+# Paid / marking
+# =========================
 
 @dp.callback_query(F.data.startswith("manual_sent|"))
 async def manual_sent(call: CallbackQuery):
@@ -964,7 +1032,7 @@ async def manual_sent(call: CallbackQuery):
     amount_eur = int(amount_eur)
 
     if campaign == "fitr":
-        people = max(1, int(note.replace("ZF", "") or "1"))
+        people = parse_fitr_code(note) or max(1, amount_eur // 10)
         PENDING[call.from_user.id] = {
             "kind": "fitr_identity",
             "method": method,
@@ -983,7 +1051,6 @@ async def manual_sent(call: CallbackQuery):
         await call.message.answer(t(lang, "После оплаты напишите цифру перевода в евро.", "After payment send the transfer amount in EUR."))
         return
 
-    # water / iftar direct mark
     if campaign == "water":
         await kv_inc_int("water_raised_eur", amount_eur)
     elif campaign == "iftar":
@@ -1019,12 +1086,7 @@ async def fitr_format_choice(call: CallbackQuery):
     if not ctx or ctx.get("kind") != "fitr_identity":
         await call.answer()
         return
-
-    mapping = {
-        "fitr_fmt_umm": "umm",
-        "fitr_fmt_abu": "abu",
-        "fitr_fmt_name": "name",
-    }
+    mapping = {"fitr_fmt_umm": "umm", "fitr_fmt_abu": "abu", "fitr_fmt_name": "name"}
     ctx["fmt"] = mapping[call.data]
     ctx["step"] = "name"
     PENDING[call.from_user.id] = ctx
@@ -1037,15 +1099,7 @@ async def text_input(message: Message):
     ctx = PENDING.get(message.from_user.id)
     if not ctx:
         return
-
     raw = (message.text or "").strip()
-
-    def parse_positive_int(s: str) -> int | None:
-        try:
-            n = int(s)
-            return n if n > 0 else None
-        except Exception:
-            return None
 
     if ctx["kind"] == "edit_text":
         key = ctx["key"]
@@ -1057,13 +1111,13 @@ async def text_input(message: Message):
         return
 
     if ctx["kind"] == "other_eur":
-        n = parse_positive_int(raw)
+        n = extract_positive_int(raw)
         if not n:
-            await message.answer(t(lang, "Нужно число > 0.", "Need number > 0."))
+            await message.answer(t(lang, "Введите только число. Пример: 25", "Enter only a number. Example: 25"))
             return
         campaign = ctx["campaign"]
         method = ctx["method"]
-        note = {"water": "GREENMAX", "eid": "Id"}[campaign]
+        note = {"water": "Greenmax", "eid": "Id"}[campaign]
         PENDING.pop(message.from_user.id, None)
         class Dummy:
             from_user = message.from_user
@@ -1072,24 +1126,23 @@ async def text_input(message: Message):
         return
 
     if ctx["kind"] == "other_portions":
-        n = parse_positive_int(raw)
+        n = extract_positive_int(raw)
         if not n:
-            await message.answer(t(lang, "Нужно число > 0.", "Need number > 0."))
+            await message.answer(t(lang, "Введите только число. Пример: 20", "Enter only a number. Example: 20"))
             return
         eur = n * 4
         method = ctx["method"]
-        note = "Mimax"
         PENDING.pop(message.from_user.id, None)
         class Dummy:
             from_user = message.from_user
             message = message
-        await handle_payment_step(Dummy(), lang, method, "iftar", eur, note, t(lang, f"Порций: *{n}*", f"Portions: *{n}*"))
+        await handle_payment_step(Dummy(), lang, method, "iftar", eur, "Mimax", t(lang, f"Порций: *{n}*", f"Portions: *{n}*"))
         return
 
     if ctx["kind"] == "other_iftar_eur":
-        n = parse_positive_int(raw)
+        n = extract_positive_int(raw)
         if not n:
-            await message.answer(t(lang, "Нужно число > 0.", "Need number > 0."))
+            await message.answer(t(lang, "Введите только число. Пример: 50", "Enter only a number. Example: 50"))
             return
         method = ctx["method"]
         portions = max(1, n // 4)
@@ -1101,9 +1154,9 @@ async def text_input(message: Message):
         return
 
     if ctx["kind"] == "other_members":
-        n = parse_positive_int(raw)
+        n = extract_positive_int(raw)
         if not n:
-            await message.answer(t(lang, "Нужно число > 0.", "Need number > 0."))
+            await message.answer(t(lang, "Введите только число. Пример: 5", "Enter only a number. Example: 5"))
             return
         price = int(await kv_get("fitr_saa_eur") or "10")
         eur = n * price
@@ -1113,14 +1166,13 @@ async def text_input(message: Message):
         class Dummy:
             from_user = message.from_user
             message = message
-        summary = t(lang, f"Количество человек: *{n}*", f"People: *{n}*")
-        await handle_payment_step(Dummy(), lang, method, "fitr", eur, note, summary)
+        await handle_payment_step(Dummy(), lang, method, "fitr", eur, note, t(lang, f"Количество человек: *{n}*", f"People: *{n}*"))
         return
 
     if ctx["kind"] == "eid_confirm_amount":
-        n = parse_positive_int(raw)
+        n = extract_positive_int(raw)
         if not n:
-            await message.answer(t(lang, "Напишите сумму цифрой в евро.", "Send amount in EUR as digits."))
+            await message.answer(t(lang, "Введите только число. Пример: 25", "Enter only a number. Example: 25"))
             return
         username = message.from_user.username or ""
         pid = await add_manual_payment(message.from_user.id, username, ctx["method"], "eid", n, ctx["note"])
@@ -1179,6 +1231,7 @@ async def text_input(message: Message):
                 int(ctx["people_count"]),
                 int(ctx["amount_eur"]),
                 ctx["code"],
+                ""
             )
             await kv_inc_int("fitr_raised_eur", int(ctx["amount_eur"]))
             await fitr_report_if_needed()
@@ -1204,38 +1257,9 @@ async def text_input(message: Message):
             return
 
 
-# ================= Copy hidden values =================
-
-@dp.callback_query(F.data.in_({
-    "show_sepa_recipient", "show_sepa_iban", "show_sepa_bic",
-    "show_paypal_link", "show_zen_iban", "show_zen_bic",
-    "show_zen_phone", "show_zen_card", "show_zen_name",
-    "show_usdt", "show_usdc"
-}))
-async def show_hidden_detail(call: CallbackQuery):
-    lang = await get_user_lang(call.from_user.id) or "ru"
-    await call.answer()
-    mapping = {
-        "show_sepa_recipient": SEPA_RECIPIENT,
-        "show_sepa_iban": SEPA_IBAN,
-        "show_sepa_bic": SEPA_BIC,
-        "show_paypal_link": PAYPAL_LINK,
-        "show_zen_iban": ZEN_IBAN,
-        "show_zen_bic": ZEN_BIC,
-        "show_zen_phone": ZEN_PHONE,
-        "show_zen_card": ZEN_CARD,
-        "show_zen_name": ZEN_NAME,
-        "show_usdt": USDT_TRC20,
-        "show_usdc": USDC_ERC20,
-    }
-    val = mapping.get(call.data, "")
-    if not val:
-        await call.message.answer(t(lang, "Не настроено.", "Not configured."))
-        return
-    await call.message.answer(f"`{val}`", parse_mode="Markdown")
-
-
-# ================= Stars =================
+# =========================
+# Stars
+# =========================
 
 @dp.pre_checkout_query()
 async def pre_checkout(pre: PreCheckoutQuery):
@@ -1268,81 +1292,35 @@ async def successful_payment(message: Message):
     await message.answer("🌸 Джазак Аллаху хейр! Пусть ваши благие дела станут ключом к вратам Рая 🤍")
 
 
-# ================= Admin commands =================
+# =========================
+# Admin menu + shortcuts
+# =========================
 
-@dp.message(Command("set_water_target"))
-async def cmd_set_water_target(message: Message):
+@dp.message(Command("admin"))
+async def cmd_admin(message: Message):
     if not admin_only_user(message.from_user.id):
         return
-    parts = (message.text or "").split()
-    if len(parts) == 2:
-        await kv_set("water_target_eur", str(int(parts[1])))
-        await message.answer("OK")
+    txt = (
+        "/fitr\n"
+        "/iftars\n"
+        "/water\n"
+        "/eid\n\n"
+        "/fitr text | /fitr open | /fitr close | /fitr date | /fitr price\n"
+        "/fitr list | /fitr add | /fitr edit | /fitr del | /fitr find | /fitr dup\n\n"
+        "/iftars text | /iftars open | /iftars close | /iftars date | /iftars day | /iftars target | /iftars plus50\n"
+        "/water text | /water open | /water close | /water date | /water target\n"
+        "/eid text | /eid open | /eid close | /eid date | /eid target | /eid extra_day\n\n"
+        "/undo\n"
+        "/reset_test"
+    )
+    await message.answer(txt)
 
-@dp.message(Command("set_iftar_day"))
-async def cmd_set_iftar_day(message: Message):
+@dp.message(Command("undo"))
+async def cmd_undo(message: Message):
     if not admin_only_user(message.from_user.id):
         return
-    parts = (message.text or "").split()
-    if len(parts) == 2:
-        await kv_set("iftar_day", str(int(parts[1])))
-        await kv_set("iftar_raised_portions", "0")
-        await kv_set("iftar_target_portions", "800")
-        await message.answer("OK")
-
-@dp.message(Command("set_iftar_target"))
-async def cmd_set_iftar_target(message: Message):
-    if not admin_only_user(message.from_user.id):
-        return
-    parts = (message.text or "").split()
-    if len(parts) == 2:
-        await kv_set("iftar_target_portions", str(int(parts[1])))
-        await message.answer("OK")
-
-@dp.message(Command("set_fitr_saa"))
-async def cmd_set_fitr_saa(message: Message):
-    if not admin_only_user(message.from_user.id):
-        return
-    parts = (message.text or "").split()
-    if len(parts) == 2:
-        await kv_set("fitr_saa_eur", str(int(parts[1])))
-        await message.answer("OK")
-
-@dp.message(Command("open_fitr"))
-async def cmd_open_fitr(message: Message):
-    if not admin_only_user(message.from_user.id):
-        return
-    parts = (message.text or "").split()
-    if len(parts) == 2 and parts[1] in {"on", "off", "auto"}:
-        await kv_set("fitr_open_mode", parts[1])
-        await message.answer("OK")
-
-@dp.message(Command("open_eid"))
-async def cmd_open_eid(message: Message):
-    if not admin_only_user(message.from_user.id):
-        return
-    parts = (message.text or "").split()
-    if len(parts) == 2 and parts[1] in {"on", "off", "auto"}:
-        await kv_set("eid_open_mode", parts[1])
-        await message.answer("OK")
-
-@dp.message(Command("eid_extra_day"))
-async def cmd_eid_extra_day(message: Message):
-    if not admin_only_user(message.from_user.id):
-        return
-    parts = (message.text or "").split()
-    if len(parts) == 2 and parts[1] in {"on", "off"}:
-        await kv_set("eid_extra_day", parts[1])
-        await message.answer("OK")
-
-@dp.message(Command("set_test"))
-async def cmd_set_test(message: Message):
-    if not admin_only_user(message.from_user.id):
-        return
-    parts = (message.text or "").split()
-    if len(parts) == 2 and parts[1] in {"on", "off"}:
-        await kv_set("test_mode", parts[1])
-        await message.answer("OK")
+    ok = await undo_last_text_change()
+    await message.answer("OK" if ok else "No changes")
 
 @dp.message(Command("reset_test"))
 async def cmd_reset_test(message: Message):
@@ -1351,15 +1329,174 @@ async def cmd_reset_test(message: Message):
     await reset_test_data()
     await message.answer("OK")
 
-@dp.message(Command("fitr_list"))
-async def cmd_fitr_list(message: Message):
+@dp.callback_query(F.data == "admin_undo_text")
+async def cb_admin_undo(call: CallbackQuery):
+    if not admin_only_user(call.from_user.id):
+        await call.answer()
+        return
+    ok = await undo_last_text_change()
+    await call.answer("OK" if ok else "No changes", show_alert=True)
+
+@dp.callback_query(F.data == "admin_reset_test")
+async def cb_admin_reset_test(call: CallbackQuery):
+    if not admin_only_user(call.from_user.id):
+        await call.answer()
+        return
+    await reset_test_data()
+    await call.answer("OK", show_alert=True)
+
+
+# =========================
+# Admin text/date/open/close
+# =========================
+
+async def set_mode_for_campaign(campaign: str, mode: str):
+    key = {
+        "fitr": "fitr_open_mode",
+        "iftars": "iftar_open_mode",
+        "water": "water_open_mode",
+        "eid": "eid_open_mode",
+    }[campaign]
+    await kv_set(key, mode)
+
+@dp.message(F.text.regexp(r"^/(fitr|iftars|water|eid)\s+text$"))
+async def admin_text_command(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    m = re.match(r"^/(fitr|iftars|water|eid)\s+text$", message.text.strip())
+    campaign = m.group(1)
+    lang = "ru"
+    key = f"desc_{campaign if campaign != 'iftars' else 'iftar'}_{lang}"
+    current = await kv_get(key)
+    PENDING[message.from_user.id] = {"kind": "edit_text", "key": key}
+    await message.answer(f"Текущий текст `{key}`:\n\n{current}\n\nОтправьте новый текст одним сообщением.", parse_mode="Markdown")
+
+@dp.message(F.text.regexp(r"^/(fitr|iftars|water|eid)\s+open$"))
+async def admin_open_command(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    campaign = re.match(r"^/(fitr|iftars|water|eid)\s+open$", message.text.strip()).group(1)
+    await set_mode_for_campaign(campaign, "on")
+    await message.answer("OK")
+
+@dp.message(F.text.regexp(r"^/(fitr|iftars|water|eid)\s+close$"))
+async def admin_close_command(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    campaign = re.match(r"^/(fitr|iftars|water|eid)\s+close$", message.text.strip()).group(1)
+    await set_mode_for_campaign(campaign, "off")
+    await message.answer("OK")
+
+@dp.message(F.text.regexp(r"^/(fitr|iftars|water|eid)\s+date$"))
+async def admin_date_command(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    campaign = re.match(r"^/(fitr|iftars|water|eid)\s+date$", message.text.strip()).group(1)
+    await message.answer(f"Date control for {campaign}: use fixed dates in code or mode open/close. Для срочной работы достаточно open/close.")
+
+@dp.message(F.text.regexp(r"^/fitr\s+price\s+\d+$"))
+async def admin_fitr_price(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    price = extract_positive_int(message.text)
+    await kv_set("fitr_saa_eur", str(price))
+    await message.answer("OK")
+
+@dp.message(F.text.regexp(r"^/iftars\s+day\s+\d+$"))
+async def admin_iftar_day(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    day = extract_positive_int(message.text)
+    await kv_set("iftar_day", str(day))
+    await kv_set("iftar_raised_portions", "0")
+    await kv_set("iftar_target_portions", "800")
+    await message.answer("OK")
+
+@dp.message(F.text.regexp(r"^/iftars\s+target\s+\d+$"))
+async def admin_iftar_target(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    target = extract_positive_int(message.text)
+    await kv_set("iftar_target_portions", str(target))
+    await message.answer("OK")
+
+@dp.message(F.text.regexp(r"^/iftars\s+plus50$"))
+async def admin_iftar_plus50_cmd(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    target = int(await kv_get("iftar_target_portions") or "800") + 50
+    await kv_set("iftar_target_portions", str(target))
+    await message.answer("OK")
+
+@dp.callback_query(F.data == "admin_iftar_plus50")
+async def admin_iftar_plus50_cb(call: CallbackQuery):
+    if not admin_only_user(call.from_user.id):
+        await call.answer()
+        return
+    target = int(await kv_get("iftar_target_portions") or "800") + 50
+    await kv_set("iftar_target_portions", str(target))
+    await call.answer("OK")
+
+@dp.message(F.text.regexp(r"^/water\s+target\s+\d+$"))
+async def admin_water_target(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    target = extract_positive_int(message.text)
+    await kv_set("water_target_eur", str(target))
+    await message.answer("OK")
+
+@dp.message(F.text.regexp(r"^/eid\s+target\s+\d+$"))
+async def admin_eid_target(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    target = extract_positive_int(message.text)
+    await kv_set("eid_target_eur", str(target))
+    await message.answer("OK")
+
+@dp.message(F.text.regexp(r"^/eid\s+extra_day\s+(on|off)$"))
+async def admin_eid_extra_day(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    mode = "on" if " on" in message.text else "off"
+    await kv_set("eid_extra_day", mode)
+    await message.answer("OK")
+
+
+# =========================
+# Fitr admin list management
+# =========================
+
+@dp.message(F.text.regexp(r"^/fitr\s+list$"))
+async def admin_fitr_list(message: Message):
     if not admin_only_user(message.from_user.id):
         return
     rows = await get_fitr_rows()
     if not rows:
         await message.answer("Список пуст.")
         return
-    parts = []
+    out = []
+    for r in rows:
+        row_id, display_name, country, city, amount_eur, code, rice_kg, method, comment = r
+        place = ", ".join([x for x in [country, city] if x])
+        line = f"{row_id}. {display_name}"
+        if place:
+            line += f" ({place})"
+        line += f" — {amount_eur}€ — {code} — {rice_kg} кг — {method}"
+        if comment:
+            line += f" — {comment}"
+        out.append(line)
+    await message.answer("\n".join(out[:80]))
+
+@dp.message(F.text.regexp(r"^/fitr\s+find\s+.+$"))
+async def admin_fitr_find(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    term = re.sub(r"^/fitr\s+find\s+", "", message.text.strip(), flags=re.I)
+    rows = await find_fitr_rows(term)
+    if not rows:
+        await message.answer("Ничего не найдено.")
+        return
+    out = []
     for r in rows:
         row_id, display_name, country, city, amount_eur, code, rice_kg, method = r
         place = ", ".join([x for x in [country, city] if x])
@@ -1367,60 +1504,92 @@ async def cmd_fitr_list(message: Message):
         if place:
             line += f" ({place})"
         line += f" — {amount_eur}€ — {code} — {rice_kg} кг — {method}"
-        parts.append(line)
-    await message.answer("\n".join(parts[:60]))
+        out.append(line)
+    await message.answer("\n".join(out[:50]))
 
-@dp.message(Command("fitr_add"))
-async def cmd_fitr_add(message: Message):
+@dp.message(F.text.regexp(r"^/fitr\s+dup$"))
+async def admin_fitr_dup(message: Message):
     if not admin_only_user(message.from_user.id):
         return
-    raw = (message.text or "").replace("/fitr_add", "", 1).strip()
-    parts = [x.strip() for x in raw.split(";")]
-    if len(parts) != 6:
-        await message.answer("Использование: /fitr_add Имя;Страна;Город;люди;сумма;paypal|zenbank|zenfast")
+    rows = await possible_fitr_dups()
+    if not rows:
+        await message.answer("Дублей не найдено.")
         return
-    display_name, country, city, people_s, amount_s, method = parts
-    people = int(people_s)
-    amount = int(amount_s)
-    code = f"ZF{people}"
-    row_id = await add_fitr_person(ADMIN_ID, "admin", method, display_name, country if country != "-" else "", city if city != "-" else "", people, amount, code)
+    out = []
+    for a_id, a_name, a_code, b_id, b_name, b_code in rows:
+        out.append(f"{a_id}. {a_name} {a_code}  <->  {b_id}. {b_name} {b_code}")
+    await message.answer("\n".join(out[:50]))
+
+@dp.message(F.text.regexp(r"^/fitr\s+add\s+.+$"))
+async def admin_fitr_add(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    raw = re.sub(r"^/fitr\s+add\s+", "", message.text.strip(), flags=re.I)
+    parts = [x.strip() for x in raw.split(";")]
+
+    if len(parts) < 2:
+        await message.answer("Использование: /fitr add Имя;ZF5;paypal|zenbank|zenfast;Страна;Город;комментарий")
+        return
+
+    display_name = parts[0]
+    code = parts[1].upper()
+    people = parse_fitr_code(code)
+    if not people:
+        await message.answer("Код должен быть вида ZF5")
+        return
+
+    method = parts[2] if len(parts) > 2 and parts[2] else "paypal"
+    country = parts[3] if len(parts) > 3 and parts[3] != "-" else ""
+    city = parts[4] if len(parts) > 4 and parts[4] != "-" else ""
+    comment = parts[5] if len(parts) > 5 and parts[5] != "-" else ""
+    amount = people * int(await kv_get("fitr_saa_eur") or "10")
+
+    row_id = await add_fitr_person(ADMIN_ID, "admin", method, display_name, country, city, people, amount, code, comment)
     await kv_inc_int("fitr_raised_eur", amount)
     await fitr_report_if_needed()
     await message.answer(f"OK #{row_id}")
 
-@dp.message(Command("fitr_del"))
-async def cmd_fitr_del(message: Message):
+@dp.message(F.text.regexp(r"^/fitr\s+edit\s+.+$"))
+async def admin_fitr_edit(message: Message):
     if not admin_only_user(message.from_user.id):
         return
-    parts = (message.text or "").split()
-    if len(parts) != 2:
-        await message.answer("Использование: /fitr_del ID")
-        return
-    await delete_fitr_row(int(parts[1]))
-    await message.answer("OK")
-
-@dp.message(Command("fitr_edit"))
-async def cmd_fitr_edit(message: Message):
-    if not admin_only_user(message.from_user.id):
-        return
-    raw = (message.text or "").replace("/fitr_edit", "", 1).strip()
+    raw = re.sub(r"^/fitr\s+edit\s+", "", message.text.strip(), flags=re.I)
     parts = [x.strip() for x in raw.split(";")]
-    if len(parts) != 7:
-        await message.answer("Использование: /fitr_edit ID;Имя;Страна;Город;люди;сумма;paypal|zenbank|zenfast")
+
+    if len(parts) < 3:
+        await message.answer("Использование: /fitr edit ID;Имя;ZF5;paypal|zenbank|zenfast;Страна;Город;комментарий")
         return
+
     row_id = int(parts[0])
     display_name = parts[1]
-    country = "" if parts[2] == "-" else parts[2]
-    city = "" if parts[3] == "-" else parts[3]
-    people = int(parts[4])
-    amount = int(parts[5])
-    method = parts[6]
-    code = f"ZF{people}"
-    await update_fitr_row(row_id, display_name, country, city, people, amount, method, code)
+    code = parts[2].upper()
+    people = parse_fitr_code(code)
+    if not people:
+        await message.answer("Код должен быть вида ZF5")
+        return
+
+    method = parts[3] if len(parts) > 3 and parts[3] else "paypal"
+    country = parts[4] if len(parts) > 4 and parts[4] != "-" else ""
+    city = parts[5] if len(parts) > 5 and parts[5] != "-" else ""
+    comment = parts[6] if len(parts) > 6 and parts[6] != "-" else ""
+    amount = people * int(await kv_get("fitr_saa_eur") or "10")
+
+    await update_fitr_row(row_id, display_name, country, city, people, amount, method, code, comment)
+    await fitr_report_if_needed()
+    await message.answer("OK")
+
+@dp.message(F.text.regexp(r"^/fitr\s+del\s+\d+$"))
+async def admin_fitr_del(message: Message):
+    if not admin_only_user(message.from_user.id):
+        return
+    row_id = extract_positive_int(message.text)
+    await delete_fitr_row(row_id)
     await message.answer("OK")
 
 
-# ================= Health =================
+# =========================
+# Health
+# =========================
 
 async def health_server():
     app = web.Application()
